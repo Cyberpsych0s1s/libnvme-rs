@@ -1,0 +1,13 @@
+[workspace]
+resolver = "2"
+members = ["libnvme-sys", "libnvme"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0 OR MIT"
+repository = "https://github.com/Omaaaaar/libnvme-rs"
+authors = ["Omaaaaar"]
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "warn"
