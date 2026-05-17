@@ -1,11 +1,15 @@
 use std::marker::PhantomData;
 
 use libnvme_sys::{
-    nvme_ctrl_get_address, nvme_ctrl_get_firmware, nvme_ctrl_get_model, nvme_ctrl_get_name,
-    nvme_ctrl_get_serial, nvme_ctrl_get_state, nvme_ctrl_get_transport, nvme_ctrl_t,
-    nvme_subsystem_first_ctrl, nvme_subsystem_next_ctrl, nvme_subsystem_t,
+    nvme_ctrl_get_address, nvme_ctrl_get_fd, nvme_ctrl_get_firmware, nvme_ctrl_get_model,
+    nvme_ctrl_get_name, nvme_ctrl_get_serial, nvme_ctrl_get_state, nvme_ctrl_get_transport,
+    nvme_ctrl_identify, nvme_ctrl_t, nvme_get_log, nvme_get_log_args, nvme_id_ctrl, nvme_smart_log,
+    nvme_subsystem_first_ctrl, nvme_subsystem_next_ctrl, nvme_subsystem_t, NVME_LOG_LID_SMART,
 };
 
+use crate::error::check_ret;
+use crate::identify::IdentifyController;
+use crate::log::SmartLog;
 use crate::namespace::Namespaces;
 use crate::util::cstr_to_str;
 use crate::{Result, Root};
@@ -60,6 +64,34 @@ impl<'r> Controller<'r> {
     /// Controller state as reported by the kernel: `live`, `resetting`, etc.
     pub fn state(&self) -> Result<&'r str> {
         unsafe { cstr_to_str(nvme_ctrl_get_state(self.inner)) }
+    }
+
+    /// Issue the Identify Controller admin command and return the decoded
+    /// data structure.
+    pub fn identify(&self) -> Result<IdentifyController> {
+        let mut id = Box::new(nvme_id_ctrl::default());
+        let ret = unsafe { nvme_ctrl_identify(self.inner, id.as_mut() as *mut _) };
+        check_ret(ret)?;
+        Ok(IdentifyController { inner: id })
+    }
+
+    /// Fetch the SMART / Health Information log page (LID 02h) for this
+    /// controller, aggregated across all namespaces.
+    pub fn smart_log(&self) -> Result<SmartLog> {
+        let mut log = Box::new(nvme_smart_log::default());
+        let fd = unsafe { nvme_ctrl_get_fd(self.inner) };
+        let mut args = nvme_get_log_args {
+            args_size: std::mem::size_of::<nvme_get_log_args>() as i32,
+            fd,
+            lid: NVME_LOG_LID_SMART,
+            nsid: 0xFFFF_FFFF,
+            log: log.as_mut() as *mut _ as *mut std::ffi::c_void,
+            len: std::mem::size_of::<nvme_smart_log>() as u32,
+            ..Default::default()
+        };
+        let ret = unsafe { nvme_get_log(&mut args) };
+        check_ret(ret)?;
+        Ok(SmartLog { inner: log })
     }
 
     /// Iterate over namespaces accessible through this controller.

@@ -1,11 +1,13 @@
 use std::marker::PhantomData;
 
 use libnvme_sys::{
-    nvme_ctrl_first_ns, nvme_ctrl_next_ns, nvme_ctrl_t, nvme_ns_get_eui64, nvme_ns_get_lba_count,
-    nvme_ns_get_lba_size, nvme_ns_get_name, nvme_ns_get_nguid, nvme_ns_get_nsid, nvme_ns_get_uuid,
-    nvme_ns_t,
+    nvme_ctrl_first_ns, nvme_ctrl_next_ns, nvme_ctrl_t, nvme_id_ns, nvme_ns_get_eui64,
+    nvme_ns_get_lba_count, nvme_ns_get_lba_size, nvme_ns_get_name, nvme_ns_get_nguid,
+    nvme_ns_get_nsid, nvme_ns_get_uuid, nvme_ns_identify, nvme_ns_t,
 };
 
+use crate::error::check_ret;
+use crate::identify::IdentifyNamespace;
 use crate::util::cstr_to_str;
 use crate::{Result, Root};
 
@@ -78,6 +80,15 @@ impl<'r> Namespace<'r> {
         let mut out = [0u8; 8];
         unsafe { std::ptr::copy_nonoverlapping(ptr, out.as_mut_ptr(), 8) };
         out
+    }
+
+    /// Issue the Identify Namespace admin command and return the decoded
+    /// data structure.
+    pub fn identify(&self) -> Result<IdentifyNamespace> {
+        let mut id = Box::new(nvme_id_ns::default());
+        let ret = unsafe { nvme_ns_identify(self.inner, id.as_mut() as *mut _) };
+        check_ret(ret)?;
+        Ok(IdentifyNamespace { inner: id })
     }
 }
 
