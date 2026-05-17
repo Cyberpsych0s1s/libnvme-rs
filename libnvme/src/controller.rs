@@ -7,13 +7,17 @@ use libnvme_sys::{
     nvme_ctrl_get_numa_node, nvme_ctrl_get_phy_slot, nvme_ctrl_get_queue_count,
     nvme_ctrl_get_serial, nvme_ctrl_get_sqsize, nvme_ctrl_get_state, nvme_ctrl_get_subsysnqn,
     nvme_ctrl_get_traddr, nvme_ctrl_get_transport, nvme_ctrl_get_trsvcid, nvme_ctrl_identify,
-    nvme_ctrl_t, nvme_error_log_page, nvme_firmware_slot, nvme_get_log, nvme_get_log_args,
-    nvme_id_ctrl, nvme_smart_log, nvme_subsystem_first_ctrl, nvme_subsystem_next_ctrl,
-    nvme_subsystem_t, NVME_LOG_LID_ERROR, NVME_LOG_LID_FW_SLOT, NVME_LOG_LID_SMART,
+    nvme_ctrl_list, nvme_ctrl_t, nvme_error_log_page, nvme_firmware_slot, nvme_fw_commit,
+    nvme_fw_commit_args, nvme_fw_download_seq, nvme_get_log, nvme_get_log_args, nvme_id_ctrl,
+    nvme_id_ns, nvme_ns_attach, nvme_ns_attach_args, nvme_ns_mgmt, nvme_ns_mgmt_args,
+    nvme_smart_log, nvme_subsystem_first_ctrl, nvme_subsystem_next_ctrl, nvme_subsystem_t,
+    NVME_LOG_LID_ERROR, NVME_LOG_LID_FW_SLOT, NVME_LOG_LID_SMART, NVME_NS_ATTACH_SEL_CTRL_ATTACH,
+    NVME_NS_ATTACH_SEL_CTRL_DEATTACH, NVME_NS_MGMT_SEL_CREATE, NVME_NS_MGMT_SEL_DELETE,
 };
 
+use crate::admin::FirmwareAction;
 use crate::error::check_ret;
-use crate::identify::IdentifyController;
+use crate::identify::{IdentifyController, IdentifyNamespace};
 use crate::log::{ErrorLogEntry, FirmwareSlotLog, SmartLog};
 use crate::namespace::Namespaces;
 use crate::path::Paths;
@@ -234,6 +238,156 @@ impl<'r> Controller<'r> {
     /// Empty on non-multipath setups (most consumer PCIe SSDs).
     pub fn paths(&self) -> Paths<'r> {
         Paths::from_controller(self.inner)
+    }
+
+    /// Download a firmware image to the controller without activating it.
+    ///
+    /// **Destructive.** The image is written into the controller's transfer
+    /// buffer; a subsequent [`Self::fw_commit`] call selects which slot
+    /// receives the image and when it becomes active. Sending a malformed
+    /// or wrong-vendor firmware here followed by a Commit can brick the
+    /// controller.
+    ///
+    /// libnvme handles chunking internally (`nvme_fw_download_seq`); the
+    /// caller passes the full image as a single byte slice.
+    pub fn fw_download(&self, image: &[u8]) -> Result<()> {
+        let fd = self.open_fd()?;
+        // 0 = transfer size from controller's reported `fwug` field
+        let xfer = 0;
+        let ret = unsafe {
+            nvme_fw_download_seq(
+                fd,
+                image.len() as u32,
+                xfer,
+                0,
+                image.as_ptr() as *mut std::ffi::c_void,
+            )
+        };
+        check_ret(ret)
+    }
+
+    /// Commit a previously-downloaded firmware image to a slot and/or
+    /// activate it.
+    ///
+    /// **Destructive.** See [`FirmwareAction`] for the semantic of each
+    /// commit action. Slot indices are `1..=7`. `bpid` selects boot
+    /// partition `1` (`false`) or `2` (`true`); ignored for non-boot-partition
+    /// actions.
+    pub fn fw_commit(&self, slot: u8, action: FirmwareAction, bpid: bool) -> Result<()> {
+        let fd = self.open_fd()?;
+        let mut args = nvme_fw_commit_args {
+            result: std::ptr::null_mut(),
+            args_size: std::mem::size_of::<nvme_fw_commit_args>() as i32,
+            fd,
+            timeout: 0,
+            action: action.as_raw(),
+            slot,
+            bpid,
+        };
+        let ret = unsafe { nvme_fw_commit(&mut args) };
+        check_ret(ret)
+    }
+
+    /// Create a new namespace using the supplied [`IdentifyNamespace`] as a
+    /// template. Returns the kernel-assigned NSID on success.
+    ///
+    /// **Destructive.** After create, the namespace must be attached to one
+    /// or more controllers via [`Self::attach_namespace`] before any I/O
+    /// is possible.
+    ///
+    /// Only supported on controllers whose OACS bit 3 (Namespace Management)
+    /// is set — most consumer SSDs do not implement this.
+    pub fn create_namespace(&self, template: &IdentifyNamespace) -> Result<u32> {
+        let fd = self.open_fd()?;
+        let mut new_nsid: u32 = 0;
+        // libnvme requires a mutable pointer to the template; we copy first
+        // to avoid mutating the caller's IdentifyNamespace.
+        let mut id_ns: nvme_id_ns = *template.inner;
+        let mut args = nvme_ns_mgmt_args {
+            result: &mut new_nsid as *mut _,
+            ns: &mut id_ns as *mut _,
+            args_size: std::mem::size_of::<nvme_ns_mgmt_args>() as i32,
+            fd,
+            timeout: 0,
+            nsid: 0,
+            sel: NVME_NS_MGMT_SEL_CREATE,
+            csi: 0,
+            rsvd1: [0; 3],
+            rsvd2: std::ptr::null_mut(),
+            data: std::ptr::null_mut(),
+        };
+        let ret = unsafe { nvme_ns_mgmt(&mut args) };
+        check_ret(ret)?;
+        Ok(new_nsid)
+    }
+
+    /// Delete the namespace with the given NSID.
+    ///
+    /// **Destructive — irreversible.** Any host or controller still using
+    /// the namespace will see subsequent I/O fail.
+    pub fn delete_namespace(&self, nsid: u32) -> Result<()> {
+        let fd = self.open_fd()?;
+        let mut args = nvme_ns_mgmt_args {
+            result: std::ptr::null_mut(),
+            ns: std::ptr::null_mut(),
+            args_size: std::mem::size_of::<nvme_ns_mgmt_args>() as i32,
+            fd,
+            timeout: 0,
+            nsid,
+            sel: NVME_NS_MGMT_SEL_DELETE,
+            csi: 0,
+            rsvd1: [0; 3],
+            rsvd2: std::ptr::null_mut(),
+            data: std::ptr::null_mut(),
+        };
+        let ret = unsafe { nvme_ns_mgmt(&mut args) };
+        check_ret(ret)
+    }
+
+    /// Attach a namespace to the listed controllers.
+    ///
+    /// `controller_ids` is a slice of NVMe controller IDs (CNTLID, 16-bit).
+    /// Empty slice is a no-op (well-defined per spec, but typically a
+    /// programming mistake — consider asserting in caller code).
+    pub fn attach_namespace(&self, nsid: u32, controller_ids: &[u16]) -> Result<()> {
+        self.ns_attach_op(nsid, controller_ids, NVME_NS_ATTACH_SEL_CTRL_ATTACH)
+    }
+
+    /// Detach a namespace from the listed controllers. The namespace itself
+    /// remains in existence — see [`Self::delete_namespace`] to remove it.
+    pub fn detach_namespace(&self, nsid: u32, controller_ids: &[u16]) -> Result<()> {
+        self.ns_attach_op(nsid, controller_ids, NVME_NS_ATTACH_SEL_CTRL_DEATTACH)
+    }
+
+    fn ns_attach_op(
+        &self,
+        nsid: u32,
+        controller_ids: &[u16],
+        sel: libnvme_sys::nvme_ns_attach_sel,
+    ) -> Result<()> {
+        if controller_ids.len() > 2047 {
+            // nvme_ctrl_list.identifier is fixed at 2047 entries.
+            return Err(Error::NotAvailable);
+        }
+        let fd = self.open_fd()?;
+        let mut list = nvme_ctrl_list {
+            num: controller_ids.len() as u16,
+            identifier: [0; 2047],
+        };
+        for (i, &id) in controller_ids.iter().enumerate() {
+            list.identifier[i] = id;
+        }
+        let mut args = nvme_ns_attach_args {
+            result: std::ptr::null_mut(),
+            ctrlist: &mut list as *mut _,
+            args_size: std::mem::size_of::<nvme_ns_attach_args>() as i32,
+            fd,
+            timeout: 0,
+            nsid,
+            sel,
+        };
+        let ret = unsafe { nvme_ns_attach(&mut args) };
+        check_ret(ret)
     }
 }
 

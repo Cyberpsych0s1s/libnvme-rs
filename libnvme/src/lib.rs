@@ -31,6 +31,7 @@
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 
+mod admin;
 mod controller;
 mod error;
 mod host;
@@ -42,12 +43,15 @@ mod root;
 mod subsystem;
 mod util;
 
+pub use admin::{
+    FirmwareAction, MetadataSettings, ProtectionInfo, ProtectionLocation, SecureErase,
+};
 pub use controller::{Controller, Controllers};
 pub use error::{Error, Result};
 pub use host::{Host, Hosts};
 pub use identify::{IdentifyController, IdentifyNamespace, LbaFormat, NvmeVersion};
 pub use log::{ErrorLogEntry, FirmwareSlotLog, SmartLog};
-pub use namespace::{Namespace, Namespaces};
+pub use namespace::{Format, Namespace, Namespaces};
 pub use path::{Path, Paths};
 pub use root::Root;
 pub use subsystem::{Subsystem, Subsystems};

@@ -1,13 +1,14 @@
 use std::marker::PhantomData;
 
 use libnvme_sys::{
-    nvme_ctrl_first_ns, nvme_ctrl_next_ns, nvme_ctrl_t, nvme_id_ns, nvme_ns_get_csi,
-    nvme_ns_get_eui64, nvme_ns_get_firmware, nvme_ns_get_generic_name, nvme_ns_get_lba_count,
-    nvme_ns_get_lba_size, nvme_ns_get_lba_util, nvme_ns_get_meta_size, nvme_ns_get_model,
-    nvme_ns_get_name, nvme_ns_get_nguid, nvme_ns_get_nsid, nvme_ns_get_serial, nvme_ns_get_uuid,
-    nvme_ns_identify, nvme_ns_t,
+    nvme_ctrl_first_ns, nvme_ctrl_next_ns, nvme_ctrl_t, nvme_format_nvm, nvme_format_nvm_args,
+    nvme_id_ns, nvme_ns_get_csi, nvme_ns_get_eui64, nvme_ns_get_firmware, nvme_ns_get_generic_name,
+    nvme_ns_get_lba_count, nvme_ns_get_lba_size, nvme_ns_get_lba_util, nvme_ns_get_meta_size,
+    nvme_ns_get_model, nvme_ns_get_name, nvme_ns_get_nguid, nvme_ns_get_nsid, nvme_ns_get_serial,
+    nvme_ns_get_uuid, nvme_ns_identify, nvme_ns_t,
 };
 
+use crate::admin::{MetadataSettings, ProtectionInfo, ProtectionLocation, SecureErase};
 use crate::error::check_ret;
 use crate::identify::IdentifyNamespace;
 use crate::path::Paths;
@@ -140,6 +141,132 @@ impl<'r> Namespace<'r> {
     /// reachable. Empty on non-multipath setups.
     pub fn paths(&self) -> Paths<'r> {
         Paths::from_namespace(self.inner)
+    }
+
+    /// Begin building a Format NVM admin command for this namespace.
+    ///
+    /// **Destructive.** Format NVM erases all user data in the namespace and
+    /// applies the configured LBA format, protection settings, and secure
+    /// erase mode. The returned [`Format`] builder is inert until
+    /// [`Format::execute`] is called.
+    ///
+    /// ```no_run
+    /// # use libnvme::{Root, SecureErase};
+    /// # let root = Root::scan()?;
+    /// # let ns: libnvme::Namespace<'_> = todo!();
+    /// ns.format()
+    ///     .lba_format(0)
+    ///     .secure_erase(SecureErase::Cryptographic)
+    ///     .execute()?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn format(&self) -> Format<'_, 'r> {
+        Format::new(self)
+    }
+}
+
+/// Builder for the Format NVM admin command.
+///
+/// Created via [`Namespace::format`]. All fields default to "no-op /
+/// conservative" values (LBA format 0, no secure erase, PI disabled),
+/// so calling [`Format::execute`] without further chaining performs a
+/// metadata-only format.
+pub struct Format<'a, 'r> {
+    ns: &'a Namespace<'r>,
+    lba_format: u8,
+    secure_erase: SecureErase,
+    protection_info: ProtectionInfo,
+    protection_location: ProtectionLocation,
+    metadata: MetadataSettings,
+    lba_format_upper: u8,
+    timeout_ms: u32,
+}
+
+impl<'a, 'r> Format<'a, 'r> {
+    fn new(ns: &'a Namespace<'r>) -> Self {
+        Format {
+            ns,
+            lba_format: 0,
+            secure_erase: SecureErase::None,
+            protection_info: ProtectionInfo::Disabled,
+            protection_location: ProtectionLocation::Last,
+            metadata: MetadataSettings::Separate,
+            lba_format_upper: 0,
+            timeout_ms: 0,
+        }
+    }
+
+    /// Select the LBA format (an index into the array reported by
+    /// Identify Namespace). The active format becomes the new namespace
+    /// format after the command completes.
+    pub fn lba_format(mut self, index: u8) -> Self {
+        self.lba_format = index;
+        self
+    }
+
+    /// For NVMe 2.0+ controllers that expose more than 16 LBA formats, the
+    /// upper bits of the format index live here.
+    pub fn lba_format_upper(mut self, upper: u8) -> Self {
+        self.lba_format_upper = upper;
+        self
+    }
+
+    /// Configure secure-erase behaviour.
+    pub fn secure_erase(mut self, mode: SecureErase) -> Self {
+        self.secure_erase = mode;
+        self
+    }
+
+    /// Configure end-to-end data protection.
+    pub fn protection_info(mut self, pi: ProtectionInfo) -> Self {
+        self.protection_info = pi;
+        self
+    }
+
+    /// Where PI guard bytes sit within metadata (only meaningful when
+    /// `protection_info` is not [`ProtectionInfo::Disabled`]).
+    pub fn protection_location(mut self, location: ProtectionLocation) -> Self {
+        self.protection_location = location;
+        self
+    }
+
+    /// Whether metadata is separate or interleaved with LBA data.
+    pub fn metadata(mut self, settings: MetadataSettings) -> Self {
+        self.metadata = settings;
+        self
+    }
+
+    /// Per-command timeout in milliseconds. `0` (the default) means the
+    /// libnvme/kernel default — usually plenty for any reasonable format,
+    /// but on large drives with `SecureErase::UserData` this can be raised.
+    pub fn timeout_ms(mut self, ms: u32) -> Self {
+        self.timeout_ms = ms;
+        self
+    }
+
+    /// Execute the Format NVM command. Blocks until the controller reports
+    /// completion or returns an error.
+    pub fn execute(self) -> Result<()> {
+        let fd = unsafe { libnvme_sys::nvme_ns_get_fd(self.ns.inner) };
+        if fd < 0 {
+            return Err(crate::Error::Os(std::io::Error::last_os_error()));
+        }
+        let mut args = nvme_format_nvm_args {
+            result: std::ptr::null_mut(),
+            args_size: std::mem::size_of::<nvme_format_nvm_args>() as i32,
+            fd,
+            timeout: self.timeout_ms,
+            nsid: self.ns.nsid(),
+            mset: self.metadata.as_raw(),
+            pi: self.protection_info.as_raw(),
+            pil: self.protection_location.as_raw(),
+            ses: self.secure_erase.as_raw(),
+            lbaf: self.lba_format,
+            rsvd1: [0; 7],
+            lbafu: self.lba_format_upper,
+        };
+        let ret = unsafe { nvme_format_nvm(&mut args) };
+        check_ret(ret)
     }
 }
 
