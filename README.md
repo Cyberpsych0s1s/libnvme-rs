@@ -1,6 +1,6 @@
 # libnvme-rs
 
-Safe, idiomatic Rust bindings for the Linux [`libnvme`](https://github.com/linux-nvme/libnvme) C library — the userspace NVMe management library that backs [`nvme-cli`](https://github.com/linux-nvme/nvme-cli).
+Safe, idiomatic Rust bindings for the Linux [`libnvme`](https://github.com/linux-nvme/libnvme) C library 
 
 ## Status
 
