@@ -60,6 +60,6 @@ exec qemu-system-x86_64 \
     -drive file="$ROOT_OVERLAY",if=virtio,format=qcow2 \
     -drive file="$SEED_IMG",if=virtio,format=raw \
     -drive file="$NVME_IMG",if=none,id=nvmedrive,format=raw \
-    -device nvme,drive=nvmedrive,serial=DEADBEEF12345,model="QEMU NVMe Test" \
+    -device nvme,drive=nvmedrive,serial=DEADBEEF12345 \
     -netdev user,id=net0,hostfwd=tcp::2222-:22 \
     -device virtio-net-pci,netdev=net0
