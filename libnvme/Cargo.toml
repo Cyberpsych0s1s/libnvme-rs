@@ -9,9 +9,13 @@ authors.workspace = true
 readme.workspace = true
 keywords.workspace = true
 categories.workspace = true
+build = "build.rs"
 
 [dependencies]
 libnvme-sys = { path = "../libnvme-sys", version = "0.1.0" }
+
+[build-dependencies]
+pkg-config = "0.3"
 
 [lints]
 workspace = true
