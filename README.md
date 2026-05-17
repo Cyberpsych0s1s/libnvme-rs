@@ -6,8 +6,6 @@ Safe, idiomatic Rust bindings for the Linux [`libnvme`](https://github.com/linux
 
 **Alpha — API will change.** `0.x.y` releases will break compatibility on minor-version bumps. Pin to an exact patch version (`= 0.2.0`) if you depend on this and don't want surprises.
 
-This is **Linux-only**. `libnvme` does not exist on Windows or macOS.
-
 ## Example
 
 ```rust
