@@ -8,10 +8,13 @@
 
 use std::marker::PhantomData;
 
+#[cfg(has_path_numa_nodes)]
+use libnvme_sys::nvme_path_get_numa_nodes;
+#[cfg(has_path_queue_depth)]
+use libnvme_sys::nvme_path_get_queue_depth;
 use libnvme_sys::{
     nvme_ctrl_first_path, nvme_ctrl_next_path, nvme_ctrl_t, nvme_namespace_first_path,
-    nvme_namespace_next_path, nvme_ns_t, nvme_path_get_ana_state, nvme_path_get_name,
-    nvme_path_get_numa_nodes, nvme_path_get_queue_depth, nvme_path_t,
+    nvme_namespace_next_path, nvme_ns_t, nvme_path_get_ana_state, nvme_path_get_name, nvme_path_t,
 };
 
 use crate::util::cstr_to_str;
@@ -43,11 +46,19 @@ impl<'r> Path<'r> {
     }
 
     /// Comma-separated list of NUMA nodes reachable through this path.
+    ///
+    /// Only present when built against a libnvme that exposes
+    /// `nvme_path_get_numa_nodes` (added after libnvme 1.8 / Ubuntu 24.04).
+    #[cfg(has_path_numa_nodes)]
     pub fn numa_nodes(&self) -> Result<&'r str> {
         unsafe { cstr_to_str(nvme_path_get_numa_nodes(self.inner)) }
     }
 
     /// Current queue depth on this path.
+    ///
+    /// Only present when built against a libnvme that exposes
+    /// `nvme_path_get_queue_depth` (added after libnvme 1.8 / Ubuntu 24.04).
+    #[cfg(has_path_queue_depth)]
     pub fn queue_depth(&self) -> i32 {
         unsafe { nvme_path_get_queue_depth(self.inner) }
     }
@@ -55,11 +66,13 @@ impl<'r> Path<'r> {
 
 impl std::fmt::Debug for Path<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Path")
+        let mut debug = f.debug_struct("Path");
+        debug
             .field("name", &self.name().ok())
-            .field("ana_state", &self.ana_state().ok())
-            .field("queue_depth", &self.queue_depth())
-            .finish()
+            .field("ana_state", &self.ana_state().ok());
+        #[cfg(has_path_queue_depth)]
+        debug.field("queue_depth", &self.queue_depth());
+        debug.finish()
     }
 }
 

@@ -22,6 +22,8 @@ const PROBES: &[(&str, &str)] = &[
         "has_subsystem_application",
         "nvme_subsystem_get_application",
     ),
+    ("has_path_numa_nodes", "nvme_path_get_numa_nodes"),
+    ("has_path_queue_depth", "nvme_path_get_queue_depth"),
 ];
 
 fn main() {
