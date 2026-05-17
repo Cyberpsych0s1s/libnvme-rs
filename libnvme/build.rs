@@ -13,7 +13,16 @@ use std::path::Path;
 /// When `<symbol_to_probe_for>` appears in the libnvme headers, the
 /// `<cfg_flag>` is emitted, which gates the corresponding method in source.
 /// Add a new row when v0.x work needs a function not present in older releases.
-const PROBES: &[(&str, &str)] = &[("has_subsystem_serial", "nvme_subsystem_get_serial")];
+const PROBES: &[(&str, &str)] = &[
+    ("has_subsystem_serial", "nvme_subsystem_get_serial"),
+    ("has_subsystem_model", "nvme_subsystem_get_model"),
+    ("has_subsystem_fw_rev", "nvme_subsystem_get_fw_rev"),
+    ("has_subsystem_iopolicy", "nvme_subsystem_get_iopolicy"),
+    (
+        "has_subsystem_application",
+        "nvme_subsystem_get_application",
+    ),
+];
 
 fn main() {
     let libnvme = pkg_config::Config::new()

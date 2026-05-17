@@ -1,5 +1,13 @@
 use std::marker::PhantomData;
 
+#[cfg(has_subsystem_application)]
+use libnvme_sys::nvme_subsystem_get_application;
+#[cfg(has_subsystem_fw_rev)]
+use libnvme_sys::nvme_subsystem_get_fw_rev;
+#[cfg(has_subsystem_iopolicy)]
+use libnvme_sys::nvme_subsystem_get_iopolicy;
+#[cfg(has_subsystem_model)]
+use libnvme_sys::nvme_subsystem_get_model;
 #[cfg(has_subsystem_serial)]
 use libnvme_sys::nvme_subsystem_get_serial;
 use libnvme_sys::{
@@ -46,13 +54,51 @@ impl<'r> Subsystem<'r> {
 
     /// The subsystem-level serial number, when reported.
     ///
-    /// Only present when built against a libnvme version that exposes
+    /// Only present when built against a libnvme that exposes
     /// `nvme_subsystem_get_serial`. Older releases (notably the libnvme 1.8
     /// shipped in Ubuntu 24.04) do not have this symbol; on those builds the
     /// method is compiled out.
     #[cfg(has_subsystem_serial)]
     pub fn serial(&self) -> Result<&'r str> {
         unsafe { cstr_to_str(nvme_subsystem_get_serial(self.inner)) }
+    }
+
+    /// The subsystem-level model string, when reported.
+    ///
+    /// Only present when built against a libnvme that exposes
+    /// `nvme_subsystem_get_model`.
+    #[cfg(has_subsystem_model)]
+    pub fn model(&self) -> Result<&'r str> {
+        unsafe { cstr_to_str(nvme_subsystem_get_model(self.inner)) }
+    }
+
+    /// The subsystem-level firmware revision, when reported.
+    ///
+    /// Only present when built against a libnvme that exposes
+    /// `nvme_subsystem_get_fw_rev`.
+    #[cfg(has_subsystem_fw_rev)]
+    pub fn firmware(&self) -> Result<&'r str> {
+        unsafe { cstr_to_str(nvme_subsystem_get_fw_rev(self.inner)) }
+    }
+
+    /// ANA / multipath I/O policy for this subsystem, e.g. `numa`,
+    /// `round-robin`.
+    ///
+    /// Only present when built against a libnvme that exposes
+    /// `nvme_subsystem_get_iopolicy`.
+    #[cfg(has_subsystem_iopolicy)]
+    pub fn iopolicy(&self) -> Result<&'r str> {
+        unsafe { cstr_to_str(nvme_subsystem_get_iopolicy(self.inner)) }
+    }
+
+    /// Application-set tag for this subsystem (used by tools like `nvme-cli`
+    /// for grouping). Empty when unset.
+    ///
+    /// Only present when built against a libnvme that exposes
+    /// `nvme_subsystem_get_application`.
+    #[cfg(has_subsystem_application)]
+    pub fn application(&self) -> Result<&'r str> {
+        unsafe { cstr_to_str(nvme_subsystem_get_application(self.inner)) }
     }
 
     /// Iterate over the controllers in this subsystem.

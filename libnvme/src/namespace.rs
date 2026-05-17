@@ -1,9 +1,11 @@
 use std::marker::PhantomData;
 
 use libnvme_sys::{
-    nvme_ctrl_first_ns, nvme_ctrl_next_ns, nvme_ctrl_t, nvme_id_ns, nvme_ns_get_eui64,
-    nvme_ns_get_lba_count, nvme_ns_get_lba_size, nvme_ns_get_name, nvme_ns_get_nguid,
-    nvme_ns_get_nsid, nvme_ns_get_uuid, nvme_ns_identify, nvme_ns_t,
+    nvme_ctrl_first_ns, nvme_ctrl_next_ns, nvme_ctrl_t, nvme_id_ns, nvme_ns_get_csi,
+    nvme_ns_get_eui64, nvme_ns_get_firmware, nvme_ns_get_generic_name, nvme_ns_get_lba_count,
+    nvme_ns_get_lba_size, nvme_ns_get_lba_util, nvme_ns_get_meta_size, nvme_ns_get_model,
+    nvme_ns_get_name, nvme_ns_get_nguid, nvme_ns_get_nsid, nvme_ns_get_serial, nvme_ns_get_uuid,
+    nvme_ns_identify, nvme_ns_t,
 };
 
 use crate::error::check_ret;
@@ -33,6 +35,12 @@ impl<'r> Namespace<'r> {
         unsafe { cstr_to_str(nvme_ns_get_name(self.inner)) }
     }
 
+    /// Generic-namespace name, e.g. `ng0n1`. The generic device exposes the
+    /// namespace via `/dev/ng*` for passthrough I/O.
+    pub fn generic_name(&self) -> Result<&'r str> {
+        unsafe { cstr_to_str(nvme_ns_get_generic_name(self.inner)) }
+    }
+
     /// Namespace identifier (1-based, unique within the controller).
     pub fn nsid(&self) -> u32 {
         (unsafe { nvme_ns_get_nsid(self.inner) }) as u32
@@ -43,14 +51,50 @@ impl<'r> Namespace<'r> {
         (unsafe { nvme_ns_get_lba_size(self.inner) }) as u32
     }
 
+    /// Metadata bytes per LBA, or `0` if metadata is not used in the active
+    /// LBA format.
+    pub fn meta_size(&self) -> u32 {
+        (unsafe { nvme_ns_get_meta_size(self.inner) }) as u32
+    }
+
     /// Total number of logical blocks in the namespace.
     pub fn lba_count(&self) -> u64 {
         unsafe { nvme_ns_get_lba_count(self.inner) }
     }
 
+    /// Number of logical blocks actually allocated within the namespace
+    /// (`nuse` in Identify Namespace).
+    pub fn lba_utilization(&self) -> u64 {
+        unsafe { nvme_ns_get_lba_util(self.inner) }
+    }
+
     /// Total namespace size in bytes (`lba_count * lba_size`).
     pub fn size_bytes(&self) -> u64 {
         self.lba_count().saturating_mul(u64::from(self.lba_size()))
+    }
+
+    /// Command Set Identifier. `0` = NVM, `1` = Key-Value, `2` = Zoned.
+    pub fn csi(&self) -> u8 {
+        (unsafe { nvme_ns_get_csi(self.inner) }) as u8
+    }
+
+    /// Model string of the controller that owns this namespace
+    /// (whitespace-trimmed). Convenience wrapper that avoids walking back up
+    /// through `Subsystem` / `Controller`.
+    pub fn model(&self) -> Result<&'r str> {
+        unsafe { cstr_to_str(nvme_ns_get_model(self.inner)) }
+    }
+
+    /// Serial number of the controller that owns this namespace
+    /// (whitespace-trimmed).
+    pub fn serial(&self) -> Result<&'r str> {
+        unsafe { cstr_to_str(nvme_ns_get_serial(self.inner)) }
+    }
+
+    /// Firmware revision of the controller that owns this namespace
+    /// (whitespace-trimmed).
+    pub fn firmware(&self) -> Result<&'r str> {
+        unsafe { cstr_to_str(nvme_ns_get_firmware(self.inner)) }
     }
 
     /// 128-bit namespace UUID, or all-zero if not reported.
