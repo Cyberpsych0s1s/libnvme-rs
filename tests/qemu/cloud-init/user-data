@@ -11,17 +11,22 @@ users:
   - name: tester
     groups: [sudo, disk]
     sudo: ALL=(ALL) NOPASSWD:ALL
-    plain_text_passwd: nvme
     lock_passwd: false
     shell: /bin/bash
 
-ssh_pwauth: true
+# Canonical syntax for setting passwords from cloud-init (the older
+# `plain_text_passwd` field on the user above is silently ignored on
+# Ubuntu 24.04's cloud-init).
 chpasswd:
   expire: false
+  users:
+    - { name: tester, password: nvmenvme, type: text }
+
+ssh_pwauth: true
 
 package_update: false
 package_upgrade: false
 
 # Make sure the console prompt shows up quickly so it's obvious the
 # guest is ready.
-final_message: "*** libnvme-rs QEMU guest ready. Login: tester / nvme ***"
+final_message: "*** libnvme-rs QEMU guest ready. Login: tester / nvmenvme ***"

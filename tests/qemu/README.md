@@ -22,8 +22,8 @@ The script boots an Ubuntu 24.04 guest with:
   Test"`, serial `DEADBEEF12345`
 - SSH forwarded to host port 2222
 
-Login on the serial console as **`tester` / `nvme`**, then verify the
-virtual NVMe is present:
+Login on the serial console as **`tester` / `nvmenvme`**, then verify
+the virtual NVMe is present:
 
 ```sh
 lsblk
@@ -59,6 +59,19 @@ To be added. Plan:
 | `nvme.img` | Backing file for the virtual NVMe drive. Throw away to format-reset |
 
 Delete the whole directory to fully reset the fixture.
+
+## Re-running cloud-init after changing `cloud-init/user-data`
+
+Cloud-init only runs on first boot. Once it has provisioned a disk, it
+records that and never runs again. To re-provision with edited user-data,
+remove the overlay so it's rebuilt from the pristine base on next boot:
+
+```sh
+rm tests/qemu/.cache/root.qcow2
+bash tests/qemu/run.sh
+```
+
+The base image stays cached, so this is fast.
 
 ## Why Ubuntu 24.04?
 
