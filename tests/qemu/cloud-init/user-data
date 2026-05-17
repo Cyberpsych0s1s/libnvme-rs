@@ -1,9 +1,9 @@
 #cloud-config
-# Minimal cloud-init for libnvme-rs QEMU test fixture.
+# Cloud-init for the libnvme-rs QEMU test fixture (Phase 2).
 #
-# This is Phase 1: just create a login-able user so you can manually
-# verify the guest sees /dev/nvme0. Phase 2 will add cargo / libnvme-dev
-# installation and a 9p host share for running tests automatically.
+# Provisions an Ubuntu 24.04 guest with everything needed to build and
+# test libnvme-rs against the virtual NVMe device, mounted via 9p from
+# the host's working copy of the repo.
 
 hostname: nvme-test
 
@@ -24,9 +24,43 @@ chpasswd:
 
 ssh_pwauth: true
 
-package_update: false
+# First boot installs everything we need for `cargo build` + the bindgen
+# step + Get Log Page admin commands.
+package_update: true
 package_upgrade: false
+packages:
+  - build-essential
+  - pkg-config
+  - libnvme-dev
+  - clang
+  - libclang-dev
+  - nvme-cli
+  - rustup
+  - curl
+  - ca-certificates
 
-# Make sure the console prompt shows up quickly so it's obvious the
-# guest is ready.
-final_message: "*** libnvme-rs QEMU guest ready. Login: tester / nvmenvme ***"
+# Mount the host's working copy of the repo at /mnt/host via 9p, and
+# initialize rustup for the tester user so `cargo` is on the path.
+runcmd:
+  - mkdir -p /mnt/host
+  - |
+    mount -t 9p -o trans=virtio,version=9p2000.L,rw,access=any \
+      hostshare /mnt/host \
+      || echo "9p mount failed (run.sh likely missing -virtfs flag)"
+  - su - tester -c 'rustup default stable'
+  - |
+    cat >> /home/tester/.bashrc <<'EOF'
+    # Speed up cargo builds: keep target/ on guest-local fs, not the
+    # 9p share (writes through 9p are slow).
+    export CARGO_TARGET_DIR=/tmp/target
+    cd /mnt/host 2>/dev/null || true
+    EOF
+  - chown tester:tester /home/tester/.bashrc
+
+final_message: |
+  *** libnvme-rs QEMU guest ready ***
+  Login: tester / nvmenvme
+  Host repo is mounted at /mnt/host.
+  Quick test inside the guest:
+    cargo build --workspace --all-targets
+    sudo -E env "PATH=$PATH" cargo test --workspace

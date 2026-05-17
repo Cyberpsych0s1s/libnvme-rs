@@ -11,6 +11,7 @@
 set -euo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO="$(cd "$DIR/../.." && pwd)"
 CACHE="$DIR/.cache"
 mkdir -p "$CACHE"
 
@@ -62,4 +63,5 @@ exec qemu-system-x86_64 \
     -drive file="$NVME_IMG",if=none,id=nvmedrive,format=raw \
     -device nvme,drive=nvmedrive,serial=DEADBEEF12345 \
     -netdev user,id=net0,hostfwd=tcp::2222-:22 \
-    -device virtio-net-pci,netdev=net0
+    -device virtio-net-pci,netdev=net0 \
+    -virtfs local,path="$REPO",mount_tag=hostshare,security_model=mapped-xattr,id=hostshare
