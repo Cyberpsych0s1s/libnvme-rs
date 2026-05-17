@@ -1,0 +1,27 @@
+#cloud-config
+# Minimal cloud-init for libnvme-rs QEMU test fixture.
+#
+# This is Phase 1: just create a login-able user so you can manually
+# verify the guest sees /dev/nvme0. Phase 2 will add cargo / libnvme-dev
+# installation and a 9p host share for running tests automatically.
+
+hostname: nvme-test
+
+users:
+  - name: tester
+    groups: [sudo, disk]
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    plain_text_passwd: nvme
+    lock_passwd: false
+    shell: /bin/bash
+
+ssh_pwauth: true
+chpasswd:
+  expire: false
+
+package_update: false
+package_upgrade: false
+
+# Make sure the console prompt shows up quickly so it's obvious the
+# guest is ready.
+final_message: "*** libnvme-rs QEMU guest ready. Login: tester / nvme ***"
