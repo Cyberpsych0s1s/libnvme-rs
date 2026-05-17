@@ -2,7 +2,7 @@ use std::marker::PhantomData;
 
 use libnvme_sys::{
     nvme_first_subsystem, nvme_host_t, nvme_next_subsystem, nvme_subsystem_get_name,
-    nvme_subsystem_get_nqn, nvme_subsystem_get_serial, nvme_subsystem_get_type, nvme_subsystem_t,
+    nvme_subsystem_get_nqn, nvme_subsystem_get_type, nvme_subsystem_t,
 };
 
 use crate::controller::Controllers;
@@ -40,11 +40,6 @@ impl<'r> Subsystem<'r> {
     /// The subsystem type (e.g. `nvm`, `discovery`).
     pub fn subsystem_type(&self) -> Result<&'r str> {
         unsafe { cstr_to_str(nvme_subsystem_get_type(self.inner)) }
-    }
-
-    /// The subsystem-level serial number, when reported.
-    pub fn serial(&self) -> Result<&'r str> {
-        unsafe { cstr_to_str(nvme_subsystem_get_serial(self.inner)) }
     }
 
     /// Iterate over the controllers in this subsystem.
