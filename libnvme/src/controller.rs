@@ -2,19 +2,21 @@ use std::io;
 use std::marker::PhantomData;
 
 use libnvme_sys::{
-    nvme_ctrl_get_address, nvme_ctrl_get_fd, nvme_ctrl_get_firmware, nvme_ctrl_get_host_iface,
-    nvme_ctrl_get_host_traddr, nvme_ctrl_get_model, nvme_ctrl_get_name, nvme_ctrl_get_numa_node,
-    nvme_ctrl_get_phy_slot, nvme_ctrl_get_queue_count, nvme_ctrl_get_serial, nvme_ctrl_get_sqsize,
-    nvme_ctrl_get_state, nvme_ctrl_get_subsysnqn, nvme_ctrl_get_traddr, nvme_ctrl_get_transport,
-    nvme_ctrl_get_trsvcid, nvme_ctrl_identify, nvme_ctrl_t, nvme_get_log, nvme_get_log_args,
+    nvme_cmd_get_log_lid, nvme_ctrl_get_address, nvme_ctrl_get_fd, nvme_ctrl_get_firmware,
+    nvme_ctrl_get_host_iface, nvme_ctrl_get_host_traddr, nvme_ctrl_get_model, nvme_ctrl_get_name,
+    nvme_ctrl_get_numa_node, nvme_ctrl_get_phy_slot, nvme_ctrl_get_queue_count,
+    nvme_ctrl_get_serial, nvme_ctrl_get_sqsize, nvme_ctrl_get_state, nvme_ctrl_get_subsysnqn,
+    nvme_ctrl_get_traddr, nvme_ctrl_get_transport, nvme_ctrl_get_trsvcid, nvme_ctrl_identify,
+    nvme_ctrl_t, nvme_error_log_page, nvme_firmware_slot, nvme_get_log, nvme_get_log_args,
     nvme_id_ctrl, nvme_smart_log, nvme_subsystem_first_ctrl, nvme_subsystem_next_ctrl,
-    nvme_subsystem_t, NVME_LOG_LID_SMART,
+    nvme_subsystem_t, NVME_LOG_LID_ERROR, NVME_LOG_LID_FW_SLOT, NVME_LOG_LID_SMART,
 };
 
 use crate::error::check_ret;
 use crate::identify::IdentifyController;
-use crate::log::SmartLog;
+use crate::log::{ErrorLogEntry, FirmwareSlotLog, SmartLog};
 use crate::namespace::Namespaces;
+use crate::path::Paths;
 use crate::util::cstr_to_str;
 use crate::{Error, Result, Root};
 
@@ -130,40 +132,108 @@ impl<'r> Controller<'r> {
         Ok(IdentifyController { inner: id })
     }
 
-    /// Fetch the SMART / Health Information log page (LID 02h) for this
-    /// controller, aggregated across all namespaces.
+    /// Open the controller device and return its file descriptor.
     ///
-    /// Requires the controller device to be openable by the calling process.
-    /// If libnvme cannot open it (e.g. `EACCES` without root), the underlying
-    /// `errno` is reported here as [`Error::Os`].
-    pub fn smart_log(&self) -> Result<SmartLog> {
-        // libnvme opens the controller device lazily inside nvme_ctrl_get_fd.
-        // If that open fails it returns -1 with errno set; without this check
-        // we'd pass -1 into nvme_get_log and the real EACCES would be masked
-        // as EBADF.
+    /// libnvme opens the device lazily on first use; if that open fails
+    /// (e.g. `EACCES` without root) it returns `-1` with `errno` set. This
+    /// helper translates that into [`Error::Os`] so callers don't have to
+    /// repeat the check.
+    fn open_fd(&self) -> Result<std::os::raw::c_int> {
         let fd = unsafe { nvme_ctrl_get_fd(self.inner) };
         if fd < 0 {
-            return Err(Error::Os(io::Error::last_os_error()));
+            Err(Error::Os(io::Error::last_os_error()))
+        } else {
+            Ok(fd)
         }
+    }
 
-        let mut log = Box::new(nvme_smart_log::default());
+    /// Fetch a fixed-size log page typed as `T`.
+    ///
+    /// Generic over the libnvme struct layout for the page (e.g.
+    /// [`libnvme_sys::nvme_smart_log`]). The struct must implement [`Default`]
+    /// (all libnvme log-page structs do).
+    ///
+    /// For variable-length log pages (Error Information, Persistent Event)
+    /// use the page-specific helpers like [`Self::error_log`].
+    ///
+    /// `nsid` is `0xFFFFFFFF` for controller-wide pages, otherwise the target
+    /// namespace identifier.
+    pub fn get_log_page<T: Default>(&self, lid: u8, nsid: u32) -> Result<Box<T>> {
+        let fd = self.open_fd()?;
+        let mut buf: Box<T> = Box::default();
         let mut args = nvme_get_log_args {
             args_size: std::mem::size_of::<nvme_get_log_args>() as i32,
             fd,
-            lid: NVME_LOG_LID_SMART,
-            nsid: 0xFFFF_FFFF,
-            log: log.as_mut() as *mut _ as *mut std::ffi::c_void,
-            len: std::mem::size_of::<nvme_smart_log>() as u32,
+            lid: lid as nvme_cmd_get_log_lid,
+            nsid,
+            log: buf.as_mut() as *mut _ as *mut std::ffi::c_void,
+            len: std::mem::size_of::<T>() as u32,
             ..Default::default()
         };
         let ret = unsafe { nvme_get_log(&mut args) };
         check_ret(ret)?;
-        Ok(SmartLog { inner: log })
+        Ok(buf)
+    }
+
+    /// Fetch the SMART / Health Information log page (LID 02h), aggregated
+    /// across all namespaces.
+    pub fn smart_log(&self) -> Result<SmartLog> {
+        let inner = self.get_log_page::<nvme_smart_log>(NVME_LOG_LID_SMART as u8, 0xFFFF_FFFF)?;
+        Ok(SmartLog { inner })
+    }
+
+    /// Fetch the Firmware Slot Information log page (LID 03h).
+    pub fn fw_slot_log(&self) -> Result<FirmwareSlotLog> {
+        let inner =
+            self.get_log_page::<nvme_firmware_slot>(NVME_LOG_LID_FW_SLOT as u8, 0xFFFF_FFFF)?;
+        Ok(FirmwareSlotLog { inner })
+    }
+
+    /// Fetch up to `max_entries` entries from the Error Information log page
+    /// (LID 01h). Entries are returned newest-first; unused slots have
+    /// `error_count == 0`.
+    ///
+    /// Use [`IdentifyController::error_log_page_entries`](crate::IdentifyController::error_log_page_entries)
+    /// to discover how many entries the controller supports.
+    pub fn error_log(&self, max_entries: u32) -> Result<Vec<ErrorLogEntry>> {
+        if max_entries == 0 {
+            return Ok(Vec::new());
+        }
+        let fd = self.open_fd()?;
+        let entry_size = std::mem::size_of::<nvme_error_log_page>();
+        let total_len = entry_size
+            .checked_mul(max_entries as usize)
+            .ok_or(Error::NotAvailable)?;
+
+        let mut entries: Vec<nvme_error_log_page> =
+            vec![nvme_error_log_page::default(); max_entries as usize];
+        let mut args = nvme_get_log_args {
+            args_size: std::mem::size_of::<nvme_get_log_args>() as i32,
+            fd,
+            lid: NVME_LOG_LID_ERROR,
+            nsid: 0xFFFF_FFFF,
+            log: entries.as_mut_ptr() as *mut std::ffi::c_void,
+            len: total_len as u32,
+            ..Default::default()
+        };
+        let ret = unsafe { nvme_get_log(&mut args) };
+        check_ret(ret)?;
+
+        Ok(entries
+            .into_iter()
+            .map(|inner| ErrorLogEntry { inner })
+            .collect())
     }
 
     /// Iterate over namespaces accessible through this controller.
     pub fn namespaces(&self) -> Namespaces<'r> {
         Namespaces::new(self.inner)
+    }
+
+    /// Iterate over the multipath paths reachable through this controller.
+    /// Empty on non-multipath setups (most consumer PCIe SSDs).
+    pub fn paths(&self) -> Paths<'r> {
+        Paths::from_controller(self.inner)
     }
 }
 

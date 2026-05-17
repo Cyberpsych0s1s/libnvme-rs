@@ -1,9 +1,17 @@
 //! NVMe log pages.
 //!
-//! Currently exposes the SMART / Health Information log page (LID 02h).
-//! Generic log-page support is planned for a later release.
+//! Each typed log page (e.g. [`SmartLog`], [`FirmwareSlotLog`]) wraps the
+//! raw `nvme_*_log` struct returned by libnvme's Get Log Page admin command.
+//!
+//! The fixed-size pages are fetched via
+//! [`Controller::get_log_page`](crate::Controller::get_log_page), a generic
+//! helper parameterized by the libnvme struct type. The Error Information
+//! log is variable-sized (an array of entries) and uses a dedicated method.
 
-use libnvme_sys::nvme_smart_log;
+use libnvme_sys::{nvme_error_log_page, nvme_firmware_slot, nvme_smart_log};
+
+use crate::util::fixed_ascii_to_str;
+use crate::{Error, Result};
 
 /// Decoded SMART / Health Information log page (LID 02h).
 ///
@@ -23,7 +31,6 @@ impl SmartLog {
 
     /// Composite temperature in Kelvin.
     pub fn temperature_kelvin(&self) -> u16 {
-        // Stored as a 16-bit little-endian field in two bytes.
         u16::from_le_bytes(self.inner.temperature)
     }
 
@@ -140,6 +147,146 @@ impl std::fmt::Debug for SmartLog {
             .field("power_cycles", &self.power_cycles())
             .field("power_on_hours", &self.power_on_hours())
             .field("unsafe_shutdowns", &self.unsafe_shutdowns())
+            .finish()
+    }
+}
+
+/// Firmware Slot Information log page (LID 03h).
+///
+/// Reports which firmware slot is currently active, which (if any) is
+/// scheduled for activation on next reset, and the firmware revision string
+/// stored in each of the up-to-7 slots.
+pub struct FirmwareSlotLog {
+    pub(crate) inner: Box<nvme_firmware_slot>,
+}
+
+impl FirmwareSlotLog {
+    /// Raw Active Firmware Info byte (AFI).
+    ///
+    /// Bits 0–2: currently active slot. Bits 4–6: slot scheduled for
+    /// activation on next reset (`0` if none).
+    pub fn afi(&self) -> u8 {
+        self.inner.afi
+    }
+
+    /// Currently active firmware slot (`1..=7`).
+    pub fn active_slot(&self) -> u8 {
+        self.inner.afi & 0x07
+    }
+
+    /// Slot that will activate on next controller-level reset, if any.
+    pub fn next_slot_to_activate(&self) -> Option<u8> {
+        let next = (self.inner.afi >> 4) & 0x07;
+        if next == 0 {
+            None
+        } else {
+            Some(next)
+        }
+    }
+
+    /// Firmware revision string stored in the given slot (`1..=7`).
+    ///
+    /// Returns [`Error::NotAvailable`] for indices outside that range; an
+    /// empty string if the slot is unused.
+    pub fn slot_firmware(&self, slot: u8) -> Result<&str> {
+        if !(1..=7).contains(&slot) {
+            return Err(Error::NotAvailable);
+        }
+        fixed_ascii_to_str(&self.inner.frs[usize::from(slot - 1)])
+    }
+}
+
+impl std::fmt::Debug for FirmwareSlotLog {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FirmwareSlotLog")
+            .field("active_slot", &self.active_slot())
+            .field("next_slot_to_activate", &self.next_slot_to_activate())
+            .field("slot_1", &self.slot_firmware(1).ok())
+            .field("slot_2", &self.slot_firmware(2).ok())
+            .field("slot_3", &self.slot_firmware(3).ok())
+            .finish()
+    }
+}
+
+/// One entry from the Error Information log page (LID 01h).
+///
+/// The error log is a ring buffer; entry `0` is the most recent and
+/// `error_count == 0` indicates an unused slot.
+#[derive(Clone, Copy)]
+pub struct ErrorLogEntry {
+    pub(crate) inner: nvme_error_log_page,
+}
+
+impl ErrorLogEntry {
+    /// Monotonic counter; `0` indicates this slot has never recorded an error.
+    pub fn error_count(&self) -> u64 {
+        self.inner.error_count
+    }
+
+    /// Submission Queue ID associated with the error.
+    pub fn submission_queue_id(&self) -> u16 {
+        self.inner.sqid
+    }
+
+    /// Command ID of the failing command.
+    pub fn command_id(&self) -> u16 {
+        self.inner.cmdid
+    }
+
+    /// Status field of the completion entry (NVMe status code in low bits,
+    /// status code type in upper bits).
+    pub fn status_field(&self) -> u16 {
+        self.inner.status_field
+    }
+
+    /// Byte/bit offset within the command parameters that caused the error,
+    /// if applicable.
+    pub fn parameter_error_location(&self) -> u16 {
+        self.inner.parm_error_location
+    }
+
+    /// First LBA of the failure, when relevant for the operation.
+    pub fn lba(&self) -> u64 {
+        self.inner.lba
+    }
+
+    /// Namespace ID for the failing command (`0` if not namespace-scoped).
+    pub fn nsid(&self) -> u32 {
+        self.inner.nsid
+    }
+
+    /// Vendor-specific information byte.
+    pub fn vendor_specific(&self) -> u8 {
+        self.inner.vs
+    }
+
+    /// Transport type for Fabrics errors.
+    pub fn transport_type(&self) -> u8 {
+        self.inner.trtype
+    }
+
+    /// Command Set Identifier for the failing command.
+    pub fn csi(&self) -> u8 {
+        self.inner.csi
+    }
+
+    /// Opcode of the failing command.
+    pub fn opcode(&self) -> u8 {
+        self.inner.opcode
+    }
+}
+
+impl std::fmt::Debug for ErrorLogEntry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ErrorLogEntry")
+            .field("error_count", &self.error_count())
+            .field(
+                "status_field",
+                &format_args!("0x{:04x}", self.status_field()),
+            )
+            .field("opcode", &format_args!("0x{:02x}", self.opcode()))
+            .field("nsid", &self.nsid())
+            .field("lba", &self.lba())
             .finish()
     }
 }

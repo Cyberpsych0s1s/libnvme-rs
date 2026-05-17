@@ -10,6 +10,7 @@ use libnvme_sys::{
 
 use crate::error::check_ret;
 use crate::identify::IdentifyNamespace;
+use crate::path::Paths;
 use crate::util::cstr_to_str;
 use crate::{Result, Root};
 
@@ -133,6 +134,12 @@ impl<'r> Namespace<'r> {
         let ret = unsafe { nvme_ns_identify(self.inner, id.as_mut() as *mut _) };
         check_ret(ret)?;
         Ok(IdentifyNamespace { inner: id })
+    }
+
+    /// Iterate over the multipath paths through which this namespace is
+    /// reachable. Empty on non-multipath setups.
+    pub fn paths(&self) -> Paths<'r> {
+        Paths::from_namespace(self.inner)
     }
 }
 

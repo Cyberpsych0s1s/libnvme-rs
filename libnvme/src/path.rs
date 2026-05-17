@@ -1,0 +1,113 @@
+//! Multipath / ANA paths.
+//!
+//! In multipath configurations (ANA, NVMe-oF), a single namespace can be
+//! reachable through multiple controller "paths". This module exposes
+//! libnvme's path handles via [`Path`] and the [`Paths`] iterator, accessible
+//! from both [`Controller::paths`](crate::Controller::paths) and
+//! [`Namespace::paths`](crate::Namespace::paths).
+
+use std::marker::PhantomData;
+
+use libnvme_sys::{
+    nvme_ctrl_first_path, nvme_ctrl_next_path, nvme_ctrl_t, nvme_namespace_first_path,
+    nvme_namespace_next_path, nvme_ns_t, nvme_path_get_ana_state, nvme_path_get_name,
+    nvme_path_get_numa_nodes, nvme_path_get_queue_depth, nvme_path_t,
+};
+
+use crate::util::cstr_to_str;
+use crate::{Result, Root};
+
+/// A single multipath route to a namespace.
+pub struct Path<'r> {
+    inner: nvme_path_t,
+    _marker: PhantomData<&'r Root>,
+}
+
+impl<'r> Path<'r> {
+    pub(crate) fn from_raw(inner: nvme_path_t) -> Self {
+        Path {
+            inner,
+            _marker: PhantomData,
+        }
+    }
+
+    /// Kernel-assigned path name.
+    pub fn name(&self) -> Result<&'r str> {
+        unsafe { cstr_to_str(nvme_path_get_name(self.inner)) }
+    }
+
+    /// Asymmetric Namespace Access (ANA) state for this path: `optimized`,
+    /// `non-optimized`, `inaccessible`, `persistent-loss`, or `change`.
+    pub fn ana_state(&self) -> Result<&'r str> {
+        unsafe { cstr_to_str(nvme_path_get_ana_state(self.inner)) }
+    }
+
+    /// Comma-separated list of NUMA nodes reachable through this path.
+    pub fn numa_nodes(&self) -> Result<&'r str> {
+        unsafe { cstr_to_str(nvme_path_get_numa_nodes(self.inner)) }
+    }
+
+    /// Current queue depth on this path.
+    pub fn queue_depth(&self) -> i32 {
+        unsafe { nvme_path_get_queue_depth(self.inner) }
+    }
+}
+
+impl std::fmt::Debug for Path<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Path")
+            .field("name", &self.name().ok())
+            .field("ana_state", &self.ana_state().ok())
+            .field("queue_depth", &self.queue_depth())
+            .finish()
+    }
+}
+
+enum PathParent {
+    Controller(nvme_ctrl_t),
+    Namespace(nvme_ns_t),
+}
+
+/// Iterator over [`Path`] entries reachable through a [`Controller`] or
+/// [`Namespace`].
+pub struct Paths<'r> {
+    parent: PathParent,
+    cursor: nvme_path_t,
+    _marker: PhantomData<&'r Root>,
+}
+
+impl<'r> Paths<'r> {
+    pub(crate) fn from_controller(ctrl: nvme_ctrl_t) -> Self {
+        let cursor = unsafe { nvme_ctrl_first_path(ctrl) };
+        Paths {
+            parent: PathParent::Controller(ctrl),
+            cursor,
+            _marker: PhantomData,
+        }
+    }
+
+    pub(crate) fn from_namespace(ns: nvme_ns_t) -> Self {
+        let cursor = unsafe { nvme_namespace_first_path(ns) };
+        Paths {
+            parent: PathParent::Namespace(ns),
+            cursor,
+            _marker: PhantomData,
+        }
+    }
+}
+
+impl<'r> Iterator for Paths<'r> {
+    type Item = Path<'r>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.cursor.is_null() {
+            return None;
+        }
+        let current = self.cursor;
+        self.cursor = match self.parent {
+            PathParent::Controller(c) => unsafe { nvme_ctrl_next_path(c, current) },
+            PathParent::Namespace(n) => unsafe { nvme_namespace_next_path(n, current) },
+        };
+        Some(Path::from_raw(current))
+    }
+}
