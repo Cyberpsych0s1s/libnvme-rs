@@ -4,7 +4,7 @@ Safe, idiomatic Rust bindings for the Linux [`libnvme`](https://github.com/linux
 
 ## Status
 
-**Alpha — API will change.** `0.x.y` releases will break compatibility on minor-version bumps. Pin to an exact patch version (`= 0.2.1`) if you depend on this and don't want surprises.
+**Alpha — API will change.** `0.x.y` releases will break compatibility on minor-version bumps. Pin to an exact patch version (`= 0.3.0`) if you depend on this and don't want surprises.
 
 ## Example
 
@@ -49,13 +49,29 @@ cargo run --example list_nvme -p libnvme
 
 ## What's covered
 
-- Enumerate the handle tree: hosts → subsystems → controllers → namespaces
-- Controller properties: name, model, serial, firmware, transport, address, state
-- Namespace properties: name, NSID, LBA size and count, total size, UUID, NGUID, EUI-64
-- Subsystem and Host basic properties (NQN, HostID, type, etc.)
+### Enumeration and properties
+
+- Enumerate the handle tree: hosts → subsystems → controllers → namespaces → paths
+- Controller properties: name, model, serial, firmware, transport, address, state, plus sysfs fields (numa_node, queue_count, sq_size, phy_slot, subsystem NQN, traddr/trsvcid/host_traddr/host_iface)
+- Namespace properties: name, generic name, NSID, LBA size and count, metadata size, utilization, CSI, total size, UUID, NGUID, EUI-64, model/serial/firmware mirrors
+- Subsystem properties: name, NQN, type, plus version-gated model/firmware/iopolicy/application/serial
+- Host basic properties (HostID, NQN, etc.)
+- Multipath/ANA `Path` iteration on both `Controller::paths` and `Namespace::paths`
+
+### Admin commands (read)
+
 - **Identify Controller** (`Controller::identify`) — vendor/subsystem IDs, NVMe spec version, FRU GUID, OACS, FRMW, LPA, NPSS, temperature thresholds, HMB sizes, TNVMCAP/UNVMCAP, NN, and more
 - **Identify Namespace** (`Namespace::identify`) — size/capacity/utilization, NSFEAT, NLBAF, FLBAS, data-protection fields, NVMCAP, NGUID/EUI-64, per-format `LbaFormat` lookup
 - **SMART / Health log page** (`Controller::smart_log`) — temperature, available spare, percentage used, data units read/written (u128), host commands, power cycles, power-on hours, unsafe shutdowns, media errors, per-sensor temperatures
+- **Firmware Slot log page** (`Controller::fw_slot_log`) — active slot, next-activate slot, slot 1..=7 firmware revisions
+- **Error Information log page** (`Controller::error_log`) — ring-buffer of recent error entries
+- **Generic Get Log Page** (`Controller::get_log_page::<T>`) — fetch any fixed-size log page by LID
+
+### Admin commands (destructive)
+
+- **Format NVM** (`Namespace::format()` builder) — LBA-format selection, secure erase (None / UserData / Cryptographic), protection-info, metadata settings, timeout
+- **Firmware Download / Commit** (`Controller::fw_download`, `Controller::fw_commit`) — whole-buffer image transfer + slot/action selection
+- **Namespace management** (`Controller::create_namespace`, `delete_namespace`, `attach_namespace`, `detach_namespace`) — full lifecycle on controllers that advertise OACS Namespace Management
 
 (Note: Will be moved to a seperate COVERAGE.md file)
 
@@ -63,14 +79,18 @@ cargo run --example list_nvme -p libnvme
 
 | Version | Scope |
 | --- | --- |
-| 0.3 | Format NVM, namespace management, firmware download/commit, generic Get Log Page |
 | 0.4 | Fabrics (TCP/RDMA connect, disconnect, discovery) |
 | Later | NVMe-MI as a sibling `libnvme-mi` crate |
 
 ## Provider-Specific Quirks
-I've noticed some drives may have issues which need to be dealt with which arise due to 
-speficic changes issues by their provider.If you feel this is the case with your drive, feel free 
-to open an issue detailing the problem.
+
+I've noticed some drives may have issues which need to be dealt with which arise due to
+specific changes issued by their provider. If you feel this is the case with your drive,
+feel free to open an issue detailing the problem.
+
+## Testing
+
+There's a QEMU-based fixture in [`tests/qemu/`](tests/qemu/) that boots an Ubuntu 24.04 guest with a 1 GiB virtual NVMe controller attached as `/dev/nvme0`, so destructive operations (Format NVM, namespace create/delete, firmware commit) can be exercised against a real NVMe protocol stack without touching the host's drives. See `tests/qemu/README.md` for the workflow.
 
 ## License
 
