@@ -1,6 +1,8 @@
 use std::io;
 use std::marker::PhantomData;
 
+#[cfg(has_unique_discovery_ctrl)]
+use libnvme_sys::nvme_ctrl_is_unique_discovery_ctrl;
 #[cfg(has_dhchap_host_key)]
 use libnvme_sys::nvme_ctrl_set_dhchap_host_key;
 #[cfg(has_keyring)]
@@ -24,8 +26,6 @@ use libnvme_sys::{
     NVME_LOG_LID_ERROR, NVME_LOG_LID_FW_SLOT, NVME_LOG_LID_SMART, NVME_NS_ATTACH_SEL_CTRL_ATTACH,
     NVME_NS_ATTACH_SEL_CTRL_DEATTACH, NVME_NS_MGMT_SEL_CREATE, NVME_NS_MGMT_SEL_DELETE,
 };
-#[cfg(has_unique_discovery_ctrl)]
-use libnvme_sys::nvme_ctrl_is_unique_discovery_ctrl;
 
 use crate::admin::FirmwareAction;
 use crate::error::check_ret;
