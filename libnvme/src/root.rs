@@ -1,11 +1,15 @@
+use std::ffi::CString;
 use std::io;
 use std::marker::PhantomData;
 use std::ptr::NonNull;
 
-use libnvme_sys::{nvme_free_tree, nvme_root, nvme_root_t, nvme_scan};
+use libnvme_sys::{
+    nvme_default_host, nvme_free_tree, nvme_lookup_host, nvme_root, nvme_scan,
+    nvmf_hostid_from_file, nvmf_hostid_generate, nvmf_hostnqn_from_file, nvmf_hostnqn_generate,
+};
 
-use crate::host::Hosts;
-use crate::Result;
+use crate::host::{Host, Hosts};
+use crate::{Error, Result};
 
 /// The owning handle to the libnvme tree.
 ///
@@ -51,10 +55,92 @@ impl Root {
         Hosts::new(self.inner.as_ptr())
     }
 
-    #[allow(dead_code)]
-    pub(crate) fn as_ptr(&self) -> nvme_root_t {
-        self.inner.as_ptr()
+    /// Get or create the default host for this root.
+    ///
+    /// libnvme uses `/etc/nvme/hostnqn` and `/etc/nvme/hostid` if present,
+    /// otherwise generates new identifiers and persists them.
+    pub fn default_host(&self) -> Result<Host<'_>> {
+        let raw = unsafe { nvme_default_host(self.inner.as_ptr()) };
+        if raw.is_null() {
+            return Err(Error::Os(io::Error::last_os_error()));
+        }
+        Ok(Host::from_raw(raw, self.inner.as_ptr()))
     }
+
+    /// Look up or create a host with the given NQN and (optional) HostID.
+    ///
+    /// Use this when you need a non-default host identity — for instance, a
+    /// fabrics client that wants to present a specific HostNQN to a target.
+    pub fn lookup_host(&self, hostnqn: &str, hostid: Option<&str>) -> Result<Host<'_>> {
+        let hostnqn_c = CString::new(hostnqn).map_err(|_| {
+            Error::Os(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "interior NUL byte in hostnqn",
+            ))
+        })?;
+        let hostid_c = match hostid {
+            Some(h) => Some(CString::new(h).map_err(|_| {
+                Error::Os(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "interior NUL byte in hostid",
+                ))
+            })?),
+            None => None,
+        };
+        let hostid_ptr = match &hostid_c {
+            Some(c) => c.as_ptr(),
+            None => std::ptr::null(),
+        };
+        let raw = unsafe { nvme_lookup_host(self.inner.as_ptr(), hostnqn_c.as_ptr(), hostid_ptr) };
+        if raw.is_null() {
+            return Err(Error::Os(io::Error::last_os_error()));
+        }
+        Ok(Host::from_raw(raw, self.inner.as_ptr()))
+    }
+}
+
+/// Generate a fresh HostNQN (NVMe spec format, embeds a freshly-generated UUID).
+/// Equivalent to libnvme's `nvmf_hostnqn_generate`. Returned string is owned.
+pub fn generate_hostnqn() -> Result<String> {
+    let raw = unsafe { nvmf_hostnqn_generate() };
+    take_owned_cstr(raw)
+}
+
+/// Generate a fresh HostID (random UUID, formatted as a hex string).
+pub fn generate_hostid() -> Result<String> {
+    let raw = unsafe { nvmf_hostid_generate() };
+    take_owned_cstr(raw)
+}
+
+/// Read the local HostNQN from `/etc/nvme/hostnqn` if it exists.
+pub fn hostnqn_from_file() -> Result<String> {
+    let raw = unsafe { nvmf_hostnqn_from_file() };
+    take_owned_cstr(raw)
+}
+
+/// Read the local HostID from `/etc/nvme/hostid` if it exists.
+pub fn hostid_from_file() -> Result<String> {
+    let raw = unsafe { nvmf_hostid_from_file() };
+    take_owned_cstr(raw)
+}
+
+/// Take ownership of a libnvme-allocated `*mut c_char`, copy it into an owned
+/// `String`, and free the original via libc's `free`.
+fn take_owned_cstr(ptr: *mut std::os::raw::c_char) -> Result<String> {
+    if ptr.is_null() {
+        return Err(Error::NotAvailable);
+    }
+    let owned = unsafe { std::ffi::CStr::from_ptr(ptr) }
+        .to_str()
+        .map_err(Error::Utf8)?
+        .to_owned();
+    unsafe { libc_free(ptr as *mut _) };
+    Ok(owned)
+}
+
+unsafe extern "C" {
+    #[link_name = "free"]
+    fn libc_free(ptr: *mut std::ffi::c_void);
 }
 
 impl Drop for Root {

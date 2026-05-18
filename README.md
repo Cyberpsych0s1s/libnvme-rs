@@ -4,7 +4,7 @@ Safe, idiomatic Rust bindings for the Linux [`libnvme`](https://github.com/linux
 
 ## Status
 
-**Alpha — API will change.** `0.x.y` releases will break compatibility on minor-version bumps. Pin to an exact patch version (`= 0.3.0`) if you depend on this and don't want surprises.
+**Alpha — API will change.** `0.x.y` releases will break compatibility on minor-version bumps. Pin to an exact patch version (`= 0.4.0`) if you depend on this and don't want surprises.
 
 ## Example
 
@@ -73,14 +73,28 @@ cargo run --example list_nvme -p libnvme
 - **Firmware Download / Commit** (`Controller::fw_download`, `Controller::fw_commit`) — whole-buffer image transfer + slot/action selection
 - **Namespace management** (`Controller::create_namespace`, `delete_namespace`, `attach_namespace`, `detach_namespace`) — full lifecycle on controllers that advertise OACS Namespace Management
 
+### Fabrics (NVMe-oF)
+
+- **Host management** — `Root::default_host`, `Root::lookup_host(hostnqn, hostid)`, plus free functions `generate_hostnqn`, `generate_hostid`, `hostnqn_from_file`, `hostid_from_file`
+- **Connect** (`Host::connect(Transport, subsysnqn)` builder) — TCP / RDMA / FC / Loop / Other, with chainable setters for traddr, trsvcid, host_traddr, host_iface, queue_size, nr_io_queues, keep_alive_tmo, reconnect_delay, ctrl_loss_tmo, hdr_digest, data_digest, tls, persistent, discovery
+- **Disconnect** (`Controller::disconnect`) — tear down a fabrics connection
+- **Reset** (`Controller::reset`) — controller reset
+- **Discovery** — `Controller::is_discovery_controller`, `Controller::discovery_log(max_retries)` returning a `DiscoveryLog` with iterable `DiscoveryLogEntry` (trtype, adrfam, subnqn, traddr, trsvcid, etc.)
+- **Authentication** — `Controller::set_dhchap_host_key`, `set_dhchap_key`, `set_tls_key`, `set_tls_key_identity`, `set_keyring`
+- **Persistence** — `Controller::is_persistent`, `set_persistent`
+
 (Note: Will be moved to a seperate COVERAGE.md file)
 
 ## Roadmap
 
 | Version | Scope |
 | --- | --- |
-| 0.4 | Fabrics (TCP/RDMA connect, disconnect, discovery) |
-| Later | NVMe-MI as a sibling `libnvme-mi` crate |
+| 0.5 | Get/Set Features (all 69 variants — bulk pass) |
+| 0.6 | Sanitize, Self-test, Security Send/Receive, Lockdown |
+| 0.7 | I/O commands (Read, Write, Flush, Compare, Copy, DSM, Verify) + admin/io passthru |
+| 0.8 | Command-set-specific surfaces (ZNS, Key-Value, Dispersed Namespaces, Reservations) |
+| 0.9 | NVMe-MI as a sibling `libnvme-mi` crate |
+| 1.0 | API stabilization + docs + crates.io publish. **Goal: 100% safe coverage of libnvme's public API.** |
 
 ## Provider-Specific Quirks
 

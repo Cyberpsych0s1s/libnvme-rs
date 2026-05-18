@@ -18,10 +18,14 @@ fn main() {
         .generate_comments(true)
         .prepend_enum_name(false)
         .allowlist_function("nvme_.*")
+        .allowlist_function("nvmf_.*")
         .allowlist_type("nvme_.*")
+        .allowlist_type("nvmf_.*")
         .allowlist_type("__[blu]e?\\d+")
         .allowlist_var("NVME_.*")
-        .allowlist_var("nvme_.*");
+        .allowlist_var("nvme_.*")
+        .allowlist_var("NVMF_.*")
+        .allowlist_var("nvmf_.*");
 
     for path in &libnvme.include_paths {
         builder = builder.clang_arg(format!("-I{}", path.display()));

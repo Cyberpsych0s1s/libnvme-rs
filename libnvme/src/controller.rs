@@ -7,7 +7,11 @@ use libnvme_sys::{
     nvme_ctrl_get_numa_node, nvme_ctrl_get_phy_slot, nvme_ctrl_get_queue_count,
     nvme_ctrl_get_serial, nvme_ctrl_get_sqsize, nvme_ctrl_get_state, nvme_ctrl_get_subsysnqn,
     nvme_ctrl_get_traddr, nvme_ctrl_get_transport, nvme_ctrl_get_trsvcid, nvme_ctrl_identify,
-    nvme_ctrl_list, nvme_ctrl_t, nvme_error_log_page, nvme_firmware_slot, nvme_fw_commit,
+    nvme_ctrl_is_discovered, nvme_ctrl_is_discovery_ctrl, nvme_ctrl_is_persistent,
+    nvme_ctrl_is_unique_discovery_ctrl, nvme_ctrl_list, nvme_ctrl_reset,
+    nvme_ctrl_set_dhchap_host_key, nvme_ctrl_set_dhchap_key, nvme_ctrl_set_keyring,
+    nvme_ctrl_set_persistent, nvme_ctrl_set_tls_key, nvme_ctrl_set_tls_key_identity, nvme_ctrl_t,
+    nvme_disconnect_ctrl, nvme_error_log_page, nvme_firmware_slot, nvme_fw_commit,
     nvme_fw_commit_args, nvme_fw_download_seq, nvme_get_log, nvme_get_log_args, nvme_id_ctrl,
     nvme_id_ns, nvme_ns_attach, nvme_ns_attach_args, nvme_ns_mgmt, nvme_ns_mgmt_args,
     nvme_smart_log, nvme_subsystem_first_ctrl, nvme_subsystem_next_ctrl, nvme_subsystem_t,
@@ -17,6 +21,7 @@ use libnvme_sys::{
 
 use crate::admin::FirmwareAction;
 use crate::error::check_ret;
+use crate::fabrics::{fetch_discovery_log, DiscoveryLog};
 use crate::identify::{IdentifyController, IdentifyNamespace};
 use crate::log::{ErrorLogEntry, FirmwareSlotLog, SmartLog};
 use crate::namespace::Namespaces;
@@ -389,6 +394,103 @@ impl<'r> Controller<'r> {
         let ret = unsafe { nvme_ns_attach(&mut args) };
         check_ret(ret)
     }
+
+    /// Disconnect a fabrics controller from its target.
+    ///
+    /// Consumes `self` since the underlying handle is no longer usable
+    /// after a successful disconnect.
+    pub fn disconnect(self) -> Result<()> {
+        let ret = unsafe { nvme_disconnect_ctrl(self.inner) };
+        check_ret(ret)
+    }
+
+    /// Reset the controller. Equivalent to writing `1` to
+    /// `/sys/class/nvme/nvmeN/reset_controller`.
+    pub fn reset(&self) -> Result<()> {
+        let fd = self.open_fd()?;
+        let ret = unsafe { nvme_ctrl_reset(fd) };
+        check_ret(ret)
+    }
+
+    /// True if this controller has been marked as a discovery controller.
+    pub fn is_discovery_controller(&self) -> bool {
+        unsafe { nvme_ctrl_is_discovery_ctrl(self.inner) }
+    }
+
+    /// True if this controller's record was sourced from a discovery service.
+    pub fn was_discovered(&self) -> bool {
+        unsafe { nvme_ctrl_is_discovered(self.inner) }
+    }
+
+    /// True if this is a unique discovery controller (NVMe spec ≥ 2.0).
+    pub fn is_unique_discovery_controller(&self) -> bool {
+        unsafe { nvme_ctrl_is_unique_discovery_ctrl(self.inner) }
+    }
+
+    /// True if libnvme is keeping this controller alive across reconnects.
+    pub fn is_persistent(&self) -> bool {
+        unsafe { nvme_ctrl_is_persistent(self.inner) }
+    }
+
+    /// Toggle the persistent flag for this controller.
+    pub fn set_persistent(&self, persistent: bool) {
+        unsafe { nvme_ctrl_set_persistent(self.inner, persistent) };
+    }
+
+    /// Fetch the Discovery Log Page (LID 0x70) from a discovery controller.
+    ///
+    /// Only meaningful when `self.is_discovery_controller()` is `true`.
+    /// `max_retries` is forwarded to libnvme — `0` lets libnvme pick its
+    /// default. The returned [`DiscoveryLog`] owns its allocation and frees
+    /// it on drop.
+    pub fn discovery_log(&self, max_retries: i32) -> Result<DiscoveryLog> {
+        fetch_discovery_log(self.inner, max_retries)
+    }
+
+    /// Set the DH-HMAC-CHAP host key (used to authenticate ourselves to
+    /// the target).
+    pub fn set_dhchap_host_key(&self, key: &str) -> Result<()> {
+        let c = fabrics_cstring(key, "interior NUL byte in DH-HMAC-CHAP host key")?;
+        unsafe { nvme_ctrl_set_dhchap_host_key(self.inner, c.as_ptr()) };
+        Ok(())
+    }
+
+    /// Set the DH-HMAC-CHAP target key (used to authenticate the target).
+    pub fn set_dhchap_key(&self, key: &str) -> Result<()> {
+        let c = fabrics_cstring(key, "interior NUL byte in DH-HMAC-CHAP key")?;
+        unsafe { nvme_ctrl_set_dhchap_key(self.inner, c.as_ptr()) };
+        Ok(())
+    }
+
+    /// Set the TLS pre-shared key for this controller.
+    pub fn set_tls_key(&self, key: &str) -> Result<()> {
+        let c = fabrics_cstring(key, "interior NUL byte in TLS key")?;
+        unsafe { nvme_ctrl_set_tls_key(self.inner, c.as_ptr()) };
+        Ok(())
+    }
+
+    /// Set the TLS key identity (NQN-formatted identity used in PSK lookup).
+    pub fn set_tls_key_identity(&self, identity: &str) -> Result<()> {
+        let c = fabrics_cstring(identity, "interior NUL byte in TLS key identity")?;
+        unsafe { nvme_ctrl_set_tls_key_identity(self.inner, c.as_ptr()) };
+        Ok(())
+    }
+
+    /// Set the keyring used to lookup TLS/DH-HMAC-CHAP keys.
+    pub fn set_keyring(&self, keyring: &str) -> Result<()> {
+        let c = fabrics_cstring(keyring, "interior NUL byte in keyring name")?;
+        unsafe { nvme_ctrl_set_keyring(self.inner, c.as_ptr()) };
+        Ok(())
+    }
+}
+
+fn fabrics_cstring(s: &str, err_msg: &'static str) -> Result<std::ffi::CString> {
+    std::ffi::CString::new(s).map_err(|_| {
+        Error::Os(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            err_msg,
+        ))
+    })
 }
 
 impl std::fmt::Debug for Controller<'_> {

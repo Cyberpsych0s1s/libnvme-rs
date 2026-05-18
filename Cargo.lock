@@ -102,7 +102,7 @@ dependencies = [
 
 [[package]]
 name = "libnvme"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "libnvme-sys",
  "pkg-config",
@@ -110,7 +110,7 @@ dependencies = [
 
 [[package]]
 name = "libnvme-sys"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "bindgen",
  "pkg-config",

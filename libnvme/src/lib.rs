@@ -34,6 +34,7 @@
 mod admin;
 mod controller;
 mod error;
+mod fabrics;
 mod host;
 mod identify;
 mod log;
@@ -48,10 +49,11 @@ pub use admin::{
 };
 pub use controller::{Controller, Controllers};
 pub use error::{Error, Result};
+pub use fabrics::{Connect, DiscoveryLog, DiscoveryLogEntry, Transport};
 pub use host::{Host, Hosts};
 pub use identify::{IdentifyController, IdentifyNamespace, LbaFormat, NvmeVersion};
 pub use log::{ErrorLogEntry, FirmwareSlotLog, SmartLog};
 pub use namespace::{Format, Namespace, Namespaces};
 pub use path::{Path, Paths};
-pub use root::Root;
+pub use root::{generate_hostid, generate_hostnqn, hostid_from_file, hostnqn_from_file, Root};
 pub use subsystem::{Subsystem, Subsystems};
