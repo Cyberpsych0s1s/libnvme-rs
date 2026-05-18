@@ -65,6 +65,11 @@ cargo run --example list_nvme -p libnvme
 | 0.4 | Fabrics (TCP/RDMA connect, disconnect, discovery) |
 | Later | NVMe-MI as a sibling `libnvme-mi` crate |
 
+## Provider-Specific Quirks
+I've noticed some drives may have issues which need to be dealt with which arise due to 
+speficic changes issues by their provider.If you feel this is the case with your drive, feel free 
+to open an issue detailing the problem.
+
 ## License
 
 Dual-licensed under either of:
