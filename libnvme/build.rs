@@ -24,6 +24,15 @@ const PROBES: &[(&str, &str)] = &[
     ),
     ("has_path_numa_nodes", "nvme_path_get_numa_nodes"),
     ("has_path_queue_depth", "nvme_path_get_queue_depth"),
+    // Fabrics auth + TLS surfaces added after libnvme 1.8.
+    ("has_dhchap_host_key", "nvme_ctrl_set_dhchap_host_key"),
+    ("has_tls_key", "nvme_ctrl_set_tls_key"),
+    ("has_tls_key_identity", "nvme_ctrl_set_tls_key_identity"),
+    ("has_keyring", "nvme_ctrl_set_keyring"),
+    (
+        "has_unique_discovery_ctrl",
+        "nvme_ctrl_set_unique_discovery_ctrl",
+    ),
 ];
 
 fn main() {

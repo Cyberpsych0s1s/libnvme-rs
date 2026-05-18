@@ -17,10 +17,12 @@ use std::ffi::CString;
 use std::marker::PhantomData;
 use std::ptr::NonNull;
 
+#[cfg(has_unique_discovery_ctrl)]
+use libnvme_sys::nvme_ctrl_set_unique_discovery_ctrl;
 use libnvme_sys::{
-    nvme_create_ctrl, nvme_ctrl_set_discovery_ctrl, nvme_ctrl_set_persistent,
-    nvme_ctrl_set_unique_discovery_ctrl, nvme_fabrics_config, nvmf_add_ctrl, nvmf_default_config,
-    nvmf_disc_log_entry, nvmf_discovery_log, nvmf_get_discovery_log,
+    nvme_create_ctrl, nvme_ctrl_set_discovery_ctrl, nvme_ctrl_set_persistent, nvme_fabrics_config,
+    nvmf_add_ctrl, nvmf_default_config, nvmf_disc_log_entry, nvmf_discovery_log,
+    nvmf_get_discovery_log,
 };
 
 use crate::error::check_ret;
@@ -215,6 +217,10 @@ impl<'a, 'r> Connect<'a, 'r> {
     }
 
     /// Mark as a unique discovery controller (NVMe spec ≥ 2.0).
+    ///
+    /// Only present when built against a libnvme that exposes
+    /// `nvme_ctrl_set_unique_discovery_ctrl`.
+    #[cfg(has_unique_discovery_ctrl)]
     pub fn unique_discovery(mut self) -> Self {
         self.discovery = true;
         self.unique_discovery = true;
@@ -248,6 +254,7 @@ impl<'a, 'r> Connect<'a, 'r> {
         if self.discovery {
             unsafe { nvme_ctrl_set_discovery_ctrl(ctrl, true) };
         }
+        #[cfg(has_unique_discovery_ctrl)]
         if self.unique_discovery {
             unsafe { nvme_ctrl_set_unique_discovery_ctrl(ctrl, true) };
         }

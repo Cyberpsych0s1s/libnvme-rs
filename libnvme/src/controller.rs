@@ -1,16 +1,22 @@
 use std::io;
 use std::marker::PhantomData;
 
+#[cfg(has_dhchap_host_key)]
+use libnvme_sys::nvme_ctrl_set_dhchap_host_key;
+#[cfg(has_keyring)]
+use libnvme_sys::nvme_ctrl_set_keyring;
+#[cfg(has_tls_key)]
+use libnvme_sys::nvme_ctrl_set_tls_key;
+#[cfg(has_tls_key_identity)]
+use libnvme_sys::nvme_ctrl_set_tls_key_identity;
 use libnvme_sys::{
     nvme_cmd_get_log_lid, nvme_ctrl_get_address, nvme_ctrl_get_fd, nvme_ctrl_get_firmware,
     nvme_ctrl_get_host_iface, nvme_ctrl_get_host_traddr, nvme_ctrl_get_model, nvme_ctrl_get_name,
     nvme_ctrl_get_numa_node, nvme_ctrl_get_phy_slot, nvme_ctrl_get_queue_count,
     nvme_ctrl_get_serial, nvme_ctrl_get_sqsize, nvme_ctrl_get_state, nvme_ctrl_get_subsysnqn,
     nvme_ctrl_get_traddr, nvme_ctrl_get_transport, nvme_ctrl_get_trsvcid, nvme_ctrl_identify,
-    nvme_ctrl_is_discovered, nvme_ctrl_is_discovery_ctrl, nvme_ctrl_is_persistent,
-    nvme_ctrl_is_unique_discovery_ctrl, nvme_ctrl_list, nvme_ctrl_reset,
-    nvme_ctrl_set_dhchap_host_key, nvme_ctrl_set_dhchap_key, nvme_ctrl_set_keyring,
-    nvme_ctrl_set_persistent, nvme_ctrl_set_tls_key, nvme_ctrl_set_tls_key_identity, nvme_ctrl_t,
+    nvme_ctrl_is_discovered, nvme_ctrl_is_discovery_ctrl, nvme_ctrl_is_persistent, nvme_ctrl_list,
+    nvme_ctrl_reset, nvme_ctrl_set_dhchap_key, nvme_ctrl_set_persistent, nvme_ctrl_t,
     nvme_disconnect_ctrl, nvme_error_log_page, nvme_firmware_slot, nvme_fw_commit,
     nvme_fw_commit_args, nvme_fw_download_seq, nvme_get_log, nvme_get_log_args, nvme_id_ctrl,
     nvme_id_ns, nvme_ns_attach, nvme_ns_attach_args, nvme_ns_mgmt, nvme_ns_mgmt_args,
@@ -18,6 +24,8 @@ use libnvme_sys::{
     NVME_LOG_LID_ERROR, NVME_LOG_LID_FW_SLOT, NVME_LOG_LID_SMART, NVME_NS_ATTACH_SEL_CTRL_ATTACH,
     NVME_NS_ATTACH_SEL_CTRL_DEATTACH, NVME_NS_MGMT_SEL_CREATE, NVME_NS_MGMT_SEL_DELETE,
 };
+#[cfg(has_unique_discovery_ctrl)]
+use libnvme_sys::nvme_ctrl_is_unique_discovery_ctrl;
 
 use crate::admin::FirmwareAction;
 use crate::error::check_ret;
@@ -423,6 +431,10 @@ impl<'r> Controller<'r> {
     }
 
     /// True if this is a unique discovery controller (NVMe spec ≥ 2.0).
+    ///
+    /// Only present when built against a libnvme that exposes
+    /// `nvme_ctrl_is_unique_discovery_ctrl` (added after libnvme 1.8).
+    #[cfg(has_unique_discovery_ctrl)]
     pub fn is_unique_discovery_controller(&self) -> bool {
         unsafe { nvme_ctrl_is_unique_discovery_ctrl(self.inner) }
     }
@@ -449,6 +461,10 @@ impl<'r> Controller<'r> {
 
     /// Set the DH-HMAC-CHAP host key (used to authenticate ourselves to
     /// the target).
+    ///
+    /// Only present when built against a libnvme that exposes
+    /// `nvme_ctrl_set_dhchap_host_key` (added after libnvme 1.8).
+    #[cfg(has_dhchap_host_key)]
     pub fn set_dhchap_host_key(&self, key: &str) -> Result<()> {
         let c = fabrics_cstring(key, "interior NUL byte in DH-HMAC-CHAP host key")?;
         unsafe { nvme_ctrl_set_dhchap_host_key(self.inner, c.as_ptr()) };
@@ -463,6 +479,10 @@ impl<'r> Controller<'r> {
     }
 
     /// Set the TLS pre-shared key for this controller.
+    ///
+    /// Only present when built against a libnvme that exposes
+    /// `nvme_ctrl_set_tls_key` (TLS support added after libnvme 1.8).
+    #[cfg(has_tls_key)]
     pub fn set_tls_key(&self, key: &str) -> Result<()> {
         let c = fabrics_cstring(key, "interior NUL byte in TLS key")?;
         unsafe { nvme_ctrl_set_tls_key(self.inner, c.as_ptr()) };
@@ -470,6 +490,10 @@ impl<'r> Controller<'r> {
     }
 
     /// Set the TLS key identity (NQN-formatted identity used in PSK lookup).
+    ///
+    /// Only present when built against a libnvme that exposes
+    /// `nvme_ctrl_set_tls_key_identity`.
+    #[cfg(has_tls_key_identity)]
     pub fn set_tls_key_identity(&self, identity: &str) -> Result<()> {
         let c = fabrics_cstring(identity, "interior NUL byte in TLS key identity")?;
         unsafe { nvme_ctrl_set_tls_key_identity(self.inner, c.as_ptr()) };
@@ -477,6 +501,10 @@ impl<'r> Controller<'r> {
     }
 
     /// Set the keyring used to lookup TLS/DH-HMAC-CHAP keys.
+    ///
+    /// Only present when built against a libnvme that exposes
+    /// `nvme_ctrl_set_keyring`.
+    #[cfg(has_keyring)]
     pub fn set_keyring(&self, keyring: &str) -> Result<()> {
         let c = fabrics_cstring(keyring, "interior NUL byte in keyring name")?;
         unsafe { nvme_ctrl_set_keyring(self.inner, c.as_ptr()) };
