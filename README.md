@@ -57,6 +57,8 @@ cargo run --example list_nvme -p libnvme
 - **Identify Namespace** (`Namespace::identify`) — size/capacity/utilization, NSFEAT, NLBAF, FLBAS, data-protection fields, NVMCAP, NGUID/EUI-64, per-format `LbaFormat` lookup
 - **SMART / Health log page** (`Controller::smart_log`) — temperature, available spare, percentage used, data units read/written (u128), host commands, power cycles, power-on hours, unsafe shutdowns, media errors, per-sensor temperatures
 
+(Note: Will be moved to a seperate COVERAGE.md file)
+
 ## Roadmap
 
 | Version | Scope |
