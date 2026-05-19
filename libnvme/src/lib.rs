@@ -55,5 +55,9 @@ pub use identify::{IdentifyController, IdentifyNamespace, LbaFormat, NvmeVersion
 pub use log::{ErrorLogEntry, FirmwareSlotLog, SmartLog};
 pub use namespace::{Format, Namespace, Namespaces};
 pub use path::{Path, Paths};
-pub use root::{generate_hostid, generate_hostnqn, hostid_from_file, hostnqn_from_file, Root};
+#[cfg(has_hostid_generate)]
+pub use root::generate_hostid;
+#[cfg(has_hostid_from_file)]
+pub use root::hostid_from_file;
+pub use root::{generate_hostnqn, hostnqn_from_file, Root};
 pub use subsystem::{Subsystem, Subsystems};

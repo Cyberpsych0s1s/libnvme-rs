@@ -33,6 +33,8 @@ const PROBES: &[(&str, &str)] = &[
         "has_unique_discovery_ctrl",
         "nvme_ctrl_set_unique_discovery_ctrl",
     ),
+    ("has_hostid_generate", "nvmf_hostid_generate"),
+    ("has_hostid_from_file", "nvmf_hostid_from_file"),
 ];
 
 fn main() {

@@ -3,9 +3,13 @@ use std::io;
 use std::marker::PhantomData;
 use std::ptr::NonNull;
 
+#[cfg(has_hostid_from_file)]
+use libnvme_sys::nvmf_hostid_from_file;
+#[cfg(has_hostid_generate)]
+use libnvme_sys::nvmf_hostid_generate;
 use libnvme_sys::{
     nvme_default_host, nvme_free_tree, nvme_lookup_host, nvme_root, nvme_scan,
-    nvmf_hostid_from_file, nvmf_hostid_generate, nvmf_hostnqn_from_file, nvmf_hostnqn_generate,
+    nvmf_hostnqn_from_file, nvmf_hostnqn_generate,
 };
 
 use crate::host::{Host, Hosts};
@@ -107,6 +111,10 @@ pub fn generate_hostnqn() -> Result<String> {
 }
 
 /// Generate a fresh HostID (random UUID, formatted as a hex string).
+///
+/// Only present when built against a libnvme that exposes
+/// `nvmf_hostid_generate` (added after libnvme 1.8).
+#[cfg(has_hostid_generate)]
 pub fn generate_hostid() -> Result<String> {
     let raw = unsafe { nvmf_hostid_generate() };
     take_owned_cstr(raw)
@@ -119,6 +127,10 @@ pub fn hostnqn_from_file() -> Result<String> {
 }
 
 /// Read the local HostID from `/etc/nvme/hostid` if it exists.
+///
+/// Only present when built against a libnvme that exposes
+/// `nvmf_hostid_from_file` (added after libnvme 1.8).
+#[cfg(has_hostid_from_file)]
 pub fn hostid_from_file() -> Result<String> {
     let raw = unsafe { nvmf_hostid_from_file() };
     take_owned_cstr(raw)
