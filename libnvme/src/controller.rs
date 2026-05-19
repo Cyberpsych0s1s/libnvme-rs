@@ -30,6 +30,7 @@ use libnvme_sys::{
 use crate::admin::FirmwareAction;
 use crate::error::check_ret;
 use crate::fabrics::{fetch_discovery_log, DiscoveryLog};
+use crate::features::Features;
 use crate::identify::{IdentifyController, IdentifyNamespace};
 use crate::log::{ErrorLogEntry, FirmwareSlotLog, SmartLog};
 use crate::namespace::Namespaces;
@@ -155,7 +156,7 @@ impl<'r> Controller<'r> {
     /// (e.g. `EACCES` without root) it returns `-1` with `errno` set. This
     /// helper translates that into [`Error::Os`] so callers don't have to
     /// repeat the check.
-    fn open_fd(&self) -> Result<std::os::raw::c_int> {
+    pub(crate) fn open_fd(&self) -> Result<std::os::raw::c_int> {
         let fd = unsafe { nvme_ctrl_get_fd(self.inner) };
         if fd < 0 {
             Err(Error::Os(io::Error::last_os_error()))
@@ -251,6 +252,12 @@ impl<'r> Controller<'r> {
     /// Empty on non-multipath setups (most consumer PCIe SSDs).
     pub fn paths(&self) -> Paths<'r> {
         Paths::from_controller(self.inner)
+    }
+
+    /// Get/Set Features accessor — all 69 typed feature helpers grouped
+    /// under one entry point.
+    pub fn features(&self) -> Features<'_, 'r> {
+        Features { ctrl: self }
     }
 
     /// Download a firmware image to the controller without activating it.

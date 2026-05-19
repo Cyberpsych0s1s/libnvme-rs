@@ -35,6 +35,14 @@ const PROBES: &[(&str, &str)] = &[
     ),
     ("has_hostid_generate", "nvmf_hostid_generate"),
     ("has_hostid_from_file", "nvmf_hostid_from_file"),
+    // Feature "*2" variants — NVMe 2.0 extended forms, post-libnvme-1.8.
+    ("has_temp_thresh2", "nvme_set_features_temp_thresh2"),
+    ("has_err_recovery2", "nvme_get_features_err_recovery2"),
+    ("has_lba_range2", "nvme_get_features_lba_range2"),
+    ("has_host_mem_buf2", "nvme_get_features_host_mem_buf2"),
+    ("has_resv_mask2", "nvme_set_features_resv_mask2"),
+    ("has_resv_persist2", "nvme_set_features_resv_persist2"),
+    ("has_write_protect2", "nvme_set_features_write_protect2"),
 ];
 
 fn main() {

@@ -7,7 +7,7 @@
 
 use libnvme_sys::{
     nvme_cmd_format_mset, nvme_cmd_format_pi, nvme_cmd_format_pil, nvme_cmd_format_ses,
-    nvme_fw_commit_ca,
+    nvme_fw_commit_ca, nvme_get_features_sel,
 };
 
 /// How user data should be erased during a Format NVM operation.
@@ -108,5 +108,27 @@ pub enum FirmwareAction {
 impl FirmwareAction {
     pub(crate) fn as_raw(self) -> nvme_fw_commit_ca {
         self as u8 as nvme_fw_commit_ca
+    }
+}
+
+/// Which "view" of a feature value the Get Features command should return.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[repr(u8)]
+pub enum FeatureSelect {
+    /// The currently-active value for the feature.
+    #[default]
+    Current = 0,
+    /// The default value the controller ships with.
+    Default = 1,
+    /// The most recently saved value (if the feature supports save).
+    Saved = 2,
+    /// The set of supported capabilities for the feature, encoded in the
+    /// result dword. See the NVMe spec for the per-feature encoding.
+    Supported = 3,
+}
+
+impl FeatureSelect {
+    pub(crate) fn as_raw(self) -> nvme_get_features_sel {
+        self as u8 as nvme_get_features_sel
     }
 }

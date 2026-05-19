@@ -35,6 +35,7 @@ mod admin;
 mod controller;
 mod error;
 mod fabrics;
+mod features;
 mod host;
 mod identify;
 mod log;
@@ -45,11 +46,15 @@ mod subsystem;
 mod util;
 
 pub use admin::{
-    FirmwareAction, MetadataSettings, ProtectionInfo, ProtectionLocation, SecureErase,
+    FeatureSelect, FirmwareAction, MetadataSettings, ProtectionInfo, ProtectionLocation,
+    SecureErase,
 };
 pub use controller::{Controller, Controllers};
 pub use error::{Error, Result};
 pub use fabrics::{Connect, DiscoveryLog, DiscoveryLogEntry, Transport};
+pub use features::{
+    AutoPst, Features, HostBehavior, HostMemBufAttrs, LbaRangeType, PlmConfig, Timestamp,
+};
 pub use host::{Host, Hosts};
 pub use identify::{IdentifyController, IdentifyNamespace, LbaFormat, NvmeVersion};
 pub use log::{ErrorLogEntry, FirmwareSlotLog, SmartLog};
