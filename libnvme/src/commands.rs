@@ -106,21 +106,26 @@ impl<'a, 'r> Sanitize<'a, 'r> {
     /// Issue the Sanitize NVM command. Returns once the controller
     /// acknowledges the start; the actual sanitize runs asynchronously
     /// and progress is tracked via the Sanitize Status log page.
+    // Field reassignment after Default::default() is deliberate — the
+    // `emvs` field is cfg-gated and a struct literal can't conditionally
+    // omit a field, so we use Default + per-field assignment instead.
+    #[allow(clippy::field_reassign_with_default)]
     pub fn execute(self) -> Result<()> {
         let fd = self.ctrl.open_fd()?;
-        let mut args = nvme_sanitize_nvm_args {
-            result: std::ptr::null_mut(),
-            args_size: std::mem::size_of::<nvme_sanitize_nvm_args>() as i32,
-            fd,
-            timeout: self.timeout_ms,
-            sanact: self.action.as_raw(),
-            ovrpat: self.ovrpat,
-            ause: self.ause,
-            owpass: self.owpass,
-            oipbp: self.oipbp,
-            nodas: self.nodas,
-            emvs: self.emvs,
-        };
+        let mut args = nvme_sanitize_nvm_args::default();
+        args.args_size = std::mem::size_of::<nvme_sanitize_nvm_args>() as i32;
+        args.fd = fd;
+        args.timeout = self.timeout_ms;
+        args.sanact = self.action.as_raw();
+        args.ovrpat = self.ovrpat;
+        args.ause = self.ause;
+        args.owpass = self.owpass;
+        args.oipbp = self.oipbp;
+        args.nodas = self.nodas;
+        #[cfg(has_sanitize_emvs)]
+        {
+            args.emvs = self.emvs;
+        }
         let ret = unsafe { nvme_sanitize_nvm(&mut args) };
         check_ret(ret)
     }

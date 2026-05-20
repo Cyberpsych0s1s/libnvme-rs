@@ -43,6 +43,10 @@ const PROBES: &[(&str, &str)] = &[
     ("has_resv_mask2", "nvme_set_features_resv_mask2"),
     ("has_resv_persist2", "nvme_set_features_resv_persist2"),
     ("has_write_protect2", "nvme_set_features_write_protect2"),
+    // Struct-field probes (look for distinctive field names in the headers).
+    // `nvme_sanitize_nvm_args::emvs` was added with NVMe 2.0's Emulated
+    // Media Verify support; libnvme 1.8 lacks the field entirely.
+    ("has_sanitize_emvs", "bool emvs"),
 ];
 
 fn main() {
