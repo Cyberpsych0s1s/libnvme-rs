@@ -89,8 +89,6 @@ cargo run --example list_nvme -p libnvme
 
 | Version | Scope |
 | --- | --- |
-| 0.5 | Get/Set Features (all 69 variants — bulk pass) |
-| 0.6 | Sanitize, Self-test, Security Send/Receive, Lockdown |
 | 0.7 | I/O commands (Read, Write, Flush, Compare, Copy, DSM, Verify) + admin/io passthru |
 | 0.8 | Command-set-specific surfaces (ZNS, Key-Value, Dispersed Namespaces, Reservations) |
 | 0.9 | NVMe-MI as a sibling `libnvme-mi` crate |
