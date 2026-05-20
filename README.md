@@ -1,6 +1,15 @@
 # libnvme-rs
 
+[![crates.io](https://img.shields.io/crates/v/libnvme.svg)](https://crates.io/crates/libnvme)
+[![docs.rs](https://docs.rs/libnvme/badge.svg)](https://docs.rs/libnvme)
+[![CI](https://github.com/Cyberpsych0s1s/libnvme-rs/actions/workflows/ci.yml/badge.svg)](https://github.com/Cyberpsych0s1s/libnvme-rs/actions/workflows/ci.yml)
+[![License](https://img.shields.io/crates/l/libnvme.svg)](#license)
+
 Safe, idiomatic Rust bindings for the Linux [`libnvme`](https://github.com/linux-nvme/libnvme) C library — the userspace NVMe management library that backs `nvme-cli`.
+
+```sh
+cargo add libnvme
+```
 
 ```rust
 use libnvme::Root;
