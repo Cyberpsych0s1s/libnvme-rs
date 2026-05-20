@@ -1,10 +1,13 @@
 [package]
 name = "libnvme-sys"
-description = "Raw FFI bindings to the Linux libnvme C library"
+description = "Raw FFI bindings to the Linux libnvme C library (use `libnvme` for the safe wrapper)"
+documentation = "https://docs.rs/libnvme-sys"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+homepage.workspace = true
 authors.workspace = true
 readme.workspace = true
 keywords.workspace = true

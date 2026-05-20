@@ -3,10 +3,12 @@ resolver = "2"
 members = ["libnvme-sys", "libnvme"]
 
 [workspace.package]
-version = "0.6.0"
+version = "0.6.1"
 edition = "2021"
+rust-version = "1.85"
 license = "Apache-2.0 OR MIT"
 repository = "https://github.com/Cyberpsych0s1s/libnvme-rs"
+homepage = "https://github.com/Cyberpsych0s1s/libnvme-rs"
 authors = ["Cyberpsych0s1s"]
 readme = "README.md"
 keywords = ["nvme", "linux", "ffi", "bindings", "storage"]

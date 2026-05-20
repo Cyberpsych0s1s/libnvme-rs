@@ -1,10 +1,13 @@
 [package]
 name = "libnvme"
 description = "Safe, idiomatic Rust bindings for the Linux libnvme C library"
+documentation = "https://docs.rs/libnvme"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+homepage.workspace = true
 authors.workspace = true
 readme.workspace = true
 keywords.workspace = true
@@ -12,7 +15,7 @@ categories.workspace = true
 build = "build.rs"
 
 [dependencies]
-libnvme-sys = { path = "../libnvme-sys", version = "0.6.0" }
+libnvme-sys = { path = "../libnvme-sys", version = "0.6.1" }
 
 [build-dependencies]
 pkg-config = "0.3"
