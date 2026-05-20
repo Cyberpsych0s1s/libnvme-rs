@@ -7,7 +7,7 @@
 
 use libnvme_sys::{
     nvme_cmd_format_mset, nvme_cmd_format_pi, nvme_cmd_format_pil, nvme_cmd_format_ses,
-    nvme_fw_commit_ca, nvme_get_features_sel,
+    nvme_dst_stc, nvme_fw_commit_ca, nvme_get_features_sel, nvme_sanitize_sanact,
 };
 
 /// How user data should be erased during a Format NVM operation.
@@ -130,5 +130,51 @@ pub enum FeatureSelect {
 impl FeatureSelect {
     pub(crate) fn as_raw(self) -> nvme_get_features_sel {
         self as u8 as nvme_get_features_sel
+    }
+}
+
+/// Sanitize action — what the Sanitize admin command should do to the
+/// drive's user data area.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum SanitizeAction {
+    /// Exit a Sanitize Failure state (after a previous sanitize errored).
+    ExitFailure = 1,
+    /// Block-erase all user data (per spec, fast).
+    BlockErase = 2,
+    /// Multi-pass overwrite with a configurable pattern. Slow.
+    Overwrite = 3,
+    /// Cryptographic erase — destroys the media-encryption key.
+    /// Effectively instantaneous.
+    CryptoErase = 4,
+    /// Exit Media Verification (NVMe 2.0+).
+    ExitMediaVerification = 5,
+}
+
+impl SanitizeAction {
+    pub(crate) fn as_raw(self) -> nvme_sanitize_sanact {
+        self as u8 as nvme_sanitize_sanact
+    }
+}
+
+/// Self-test action for the Device Self-Test admin command.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum SelfTestAction {
+    /// Short self-test (typically completes in minutes).
+    Short = 1,
+    /// Extended self-test (hours).
+    Extended = 2,
+    /// Host-initiated self-test (NVMe 2.0+).
+    HostInitiated = 3,
+    /// Vendor-specific self-test.
+    VendorSpecific = 14,
+    /// Abort a currently-running self-test.
+    Abort = 15,
+}
+
+impl SelfTestAction {
+    pub(crate) fn as_raw(self) -> nvme_dst_stc {
+        self as u8 as nvme_dst_stc
     }
 }

@@ -32,6 +32,7 @@
 //! ```
 
 mod admin;
+mod commands;
 mod controller;
 mod error;
 mod fabrics;
@@ -47,8 +48,9 @@ mod util;
 
 pub use admin::{
     FeatureSelect, FirmwareAction, MetadataSettings, ProtectionInfo, ProtectionLocation,
-    SecureErase,
+    SanitizeAction, SecureErase, SelfTestAction,
 };
+pub use commands::{GetLbaStatusArgs, LockdownArgs, PassthruArgs, Sanitize};
 pub use controller::{Controller, Controllers};
 pub use error::{Error, Result};
 pub use fabrics::{Connect, DiscoveryLog, DiscoveryLogEntry, Transport};
