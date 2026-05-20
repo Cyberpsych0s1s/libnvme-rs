@@ -1,1 +1,6 @@
 * text=auto eol=lf
+
+# Tell GitHub Linguist to exclude vendored libnvme headers from language
+# statistics. They're upstream LGPL-2.1+ files used only by docs.rs builds,
+# not authored by this project.
+libnvme-sys/vendored-headers/** linguist-vendored

@@ -5,6 +5,22 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the projec
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html) with the
 caveat that pre-1.0 minor-version bumps may include breaking changes.
 
+## [0.6.2] – 2026-05-20
+
+### Fixed
+
+- docs.rs build for 0.6.1 failed because the docs.rs sandboxed builder
+  doesn't have `libnvme-dev` installed, so `bindgen` couldn't find the
+  headers. Resolved by vendoring an unmodified copy of `libnvme.h` and
+  `nvme/*.h` (libnvme 1.16.1) into `libnvme-sys/vendored-headers/` and
+  having both `build.rs` files use them when `DOCS_RS=1` is set. Normal
+  user builds against system `libnvme-dev` are unchanged.
+
+### Added
+
+- `libnvme-sys/vendored-headers/` — LGPL-2.1+ libnvme headers, used only
+  during docs.rs builds. Documented in `vendored-headers/README.md`.
+
 ## [0.6.1] – 2026-05-20
 
 ### Changed
@@ -147,6 +163,7 @@ caveat that pre-1.0 minor-version bumps may include breaking changes.
 - CI (Ubuntu 24.04, libnvme 1.8) running `cargo build`, `cargo test`,
   `cargo clippy`, `cargo fmt --check`
 
+[0.6.2]: https://github.com/Cyberpsych0s1s/libnvme-rs/releases/tag/v0.6.2
 [0.6.1]: https://github.com/Cyberpsych0s1s/libnvme-rs/releases/tag/v0.6.1
 [0.6.0]: https://github.com/Cyberpsych0s1s/libnvme-rs/releases/tag/v0.6.0
 [0.5.0]: https://github.com/Cyberpsych0s1s/libnvme-rs/releases/tag/v0.5.0

@@ -50,12 +50,27 @@ const PROBES: &[(&str, &str)] = &[
 ];
 
 fn main() {
-    let libnvme = pkg_config::Config::new()
-        .atleast_version("1.6")
-        .probe("libnvme")
-        .expect("libnvme not found via pkg-config (install libnvme-dev >= 1.6)");
+    // Same DOCS_RS dance as libnvme-sys/build.rs: when building on docs.rs
+    // there's no system libnvme, so probe against the headers vendored in
+    // the sibling -sys crate. Path is communicated via cargo metadata
+    // (because libnvme-sys declares `links = "nvme"` it can export
+    // `vendored_headers=...` and we read it from `DEP_NVME_VENDORED_HEADERS`).
+    let docs_rs = std::env::var_os("DOCS_RS").is_some();
+    let include_paths: Vec<std::path::PathBuf> = if docs_rs {
+        let path = std::env::var("DEP_NVME_VENDORED_HEADERS").expect(
+            "libnvme-sys did not export `vendored_headers` metadata; \
+             ensure DEP_NVME_VENDORED_HEADERS is set when DOCS_RS is set",
+        );
+        vec![std::path::PathBuf::from(path)]
+    } else {
+        let libnvme = pkg_config::Config::new()
+            .atleast_version("1.6")
+            .probe("libnvme")
+            .expect("libnvme not found via pkg-config (install libnvme-dev >= 1.6)");
+        libnvme.include_paths
+    };
 
-    let headers = collect_header_text(&libnvme.include_paths);
+    let headers = collect_header_text(&include_paths);
 
     for (cfg_name, symbol) in PROBES {
         println!("cargo::rustc-check-cfg=cfg({cfg_name})");
@@ -65,6 +80,7 @@ fn main() {
     }
 
     println!("cargo::rerun-if-changed=build.rs");
+    println!("cargo::rerun-if-env-changed=DOCS_RS");
 }
 
 fn collect_header_text(include_paths: &[std::path::PathBuf]) -> String {

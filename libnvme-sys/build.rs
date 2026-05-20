@@ -2,13 +2,15 @@ use std::env;
 use std::path::PathBuf;
 
 fn main() {
-    let libnvme = pkg_config::Config::new()
-        .atleast_version("1.6")
-        .probe("libnvme")
-        .expect("libnvme not found via pkg-config; install libnvme-dev (>= 1.6)");
-
     println!("cargo:rerun-if-changed=wrapper.h");
     println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rerun-if-env-changed=DOCS_RS");
+
+    // docs.rs builds in a sandbox without libnvme-dev installed. Detect via
+    // the DOCS_RS env var and use the vendored headers in this case; skip
+    // pkg-config (and therefore the library-link directive) so rustdoc
+    // doesn't need the runtime library either.
+    let docs_rs = env::var_os("DOCS_RS").is_some();
 
     let mut builder = bindgen::Builder::default()
         .header("wrapper.h")
@@ -27,8 +29,24 @@ fn main() {
         .allowlist_var("NVMF_.*")
         .allowlist_var("nvmf_.*");
 
-    for path in &libnvme.include_paths {
-        builder = builder.clang_arg(format!("-I{}", path.display()));
+    // Always expose the vendored-headers path as cargo metadata so the
+    // sibling `libnvme` crate's build script can find them. Because this
+    // crate declares `links = "nvme"` in Cargo.toml, downstream crates
+    // see this as `DEP_NVME_VENDORED_HEADERS` in their build environment.
+    let vendor = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap()).join("vendored-headers");
+    println!("cargo::metadata=vendored_headers={}", vendor.display());
+
+    if docs_rs {
+        // Point bindgen at the vendored headers. Don't link.
+        builder = builder.clang_arg(format!("-I{}", vendor.display()));
+    } else {
+        let libnvme = pkg_config::Config::new()
+            .atleast_version("1.6")
+            .probe("libnvme")
+            .expect("libnvme not found via pkg-config (install libnvme-dev >= 1.6)");
+        for path in &libnvme.include_paths {
+            builder = builder.clang_arg(format!("-I{}", path.display()));
+        }
     }
 
     let bindings = builder
