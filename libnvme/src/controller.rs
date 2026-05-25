@@ -35,16 +35,22 @@ use crate::identify::{IdentifyController, IdentifyNamespace};
 use crate::log::{ErrorLogEntry, FirmwareSlotLog, SmartLog};
 use crate::namespace::Namespaces;
 use crate::path::Paths;
-use crate::util::cstr_to_str;
+use crate::util::{cstr_to_str, str_to_cstring};
 use crate::{Error, Result, Root};
 
 /// An NVMe controller.
 ///
 /// Maps to a `/dev/nvmeN` character device. Controllers expose identity
 /// (model, serial, firmware) and host one or more namespaces.
+///
+/// `Controller` is `!Send + !Sync` by design — libnvme handles aren't
+/// documented as thread-safe and the file descriptor returned by
+/// `nvme_ctrl_get_fd` is opened lazily, which would race under
+/// concurrent access from multiple threads.
 pub struct Controller<'r> {
     inner: nvme_ctrl_t,
     _marker: PhantomData<&'r Root>,
+    _not_send_sync: PhantomData<*const ()>,
 }
 
 impl<'r> Controller<'r> {
@@ -52,88 +58,153 @@ impl<'r> Controller<'r> {
         Controller {
             inner,
             _marker: PhantomData,
+            _not_send_sync: PhantomData,
         }
     }
 
     /// Kernel-assigned controller name, e.g. `nvme0`.
     pub fn name(&self) -> Result<&'r str> {
+        // SAFETY: self.inner is a non-null nvme_ctrl_t obtained from libnvme's
+        // tree walk and is kept alive by the borrow of Root via 'r. libnvme
+        // returns either NULL or a valid NUL-terminated C string owned by
+        // the tree, valid for 'r. cstr_to_str checks for NULL.
         unsafe { cstr_to_str(nvme_ctrl_get_name(self.inner)) }
     }
 
     /// Controller model string from Identify Controller (whitespace-trimmed).
     pub fn model(&self) -> Result<&'r str> {
+        // SAFETY: self.inner is a non-null nvme_ctrl_t obtained from libnvme's
+        // tree walk and is kept alive by the borrow of Root via 'r. libnvme
+        // returns either NULL or a valid NUL-terminated C string owned by
+        // the tree, valid for 'r. cstr_to_str checks for NULL.
         unsafe { cstr_to_str(nvme_ctrl_get_model(self.inner)) }
     }
 
     /// Controller serial number from Identify Controller (whitespace-trimmed).
     pub fn serial(&self) -> Result<&'r str> {
+        // SAFETY: self.inner is a non-null nvme_ctrl_t obtained from libnvme's
+        // tree walk and is kept alive by the borrow of Root via 'r. libnvme
+        // returns either NULL or a valid NUL-terminated C string owned by
+        // the tree, valid for 'r. cstr_to_str checks for NULL.
         unsafe { cstr_to_str(nvme_ctrl_get_serial(self.inner)) }
     }
 
     /// Firmware revision string from Identify Controller (whitespace-trimmed).
     pub fn firmware(&self) -> Result<&'r str> {
+        // SAFETY: self.inner is a non-null nvme_ctrl_t obtained from libnvme's
+        // tree walk and is kept alive by the borrow of Root via 'r. libnvme
+        // returns either NULL or a valid NUL-terminated C string owned by
+        // the tree, valid for 'r. cstr_to_str checks for NULL.
         unsafe { cstr_to_str(nvme_ctrl_get_firmware(self.inner)) }
     }
 
     /// Transport type: `pcie`, `tcp`, `rdma`, `fc`, or `loop`.
     pub fn transport(&self) -> Result<&'r str> {
+        // SAFETY: self.inner is a non-null nvme_ctrl_t obtained from libnvme's
+        // tree walk and is kept alive by the borrow of Root via 'r. libnvme
+        // returns either NULL or a valid NUL-terminated C string owned by
+        // the tree, valid for 'r. cstr_to_str checks for NULL.
         unsafe { cstr_to_str(nvme_ctrl_get_transport(self.inner)) }
     }
 
     /// Composite transport address (e.g. PCIe BDF or Fabrics traddr/trsvcid pair).
     pub fn address(&self) -> Result<&'r str> {
+        // SAFETY: self.inner is a non-null nvme_ctrl_t obtained from libnvme's
+        // tree walk and is kept alive by the borrow of Root via 'r. libnvme
+        // returns either NULL or a valid NUL-terminated C string owned by
+        // the tree, valid for 'r. cstr_to_str checks for NULL.
         unsafe { cstr_to_str(nvme_ctrl_get_address(self.inner)) }
     }
 
     /// Controller state as reported by the kernel: `live`, `resetting`, etc.
     pub fn state(&self) -> Result<&'r str> {
+        // SAFETY: self.inner is a non-null nvme_ctrl_t obtained from libnvme's
+        // tree walk and is kept alive by the borrow of Root via 'r. libnvme
+        // returns either NULL or a valid NUL-terminated C string owned by
+        // the tree, valid for 'r. cstr_to_str checks for NULL.
         unsafe { cstr_to_str(nvme_ctrl_get_state(self.inner)) }
     }
 
     /// NUMA node the controller is attached to, as a string read from sysfs.
     /// Typically `"-1"` on single-socket or non-NUMA systems.
     pub fn numa_node(&self) -> Result<&'r str> {
+        // SAFETY: self.inner is a non-null nvme_ctrl_t obtained from libnvme's
+        // tree walk and is kept alive by the borrow of Root via 'r. libnvme
+        // returns either NULL or a valid NUL-terminated C string owned by
+        // the tree, valid for 'r. cstr_to_str checks for NULL.
         unsafe { cstr_to_str(nvme_ctrl_get_numa_node(self.inner)) }
     }
 
     /// Number of I/O queues, as a string read from sysfs.
     pub fn queue_count(&self) -> Result<&'r str> {
+        // SAFETY: self.inner is a non-null nvme_ctrl_t obtained from libnvme's
+        // tree walk and is kept alive by the borrow of Root via 'r. libnvme
+        // returns either NULL or a valid NUL-terminated C string owned by
+        // the tree, valid for 'r. cstr_to_str checks for NULL.
         unsafe { cstr_to_str(nvme_ctrl_get_queue_count(self.inner)) }
     }
 
     /// Submission Queue size, as a string read from sysfs.
     pub fn sq_size(&self) -> Result<&'r str> {
+        // SAFETY: self.inner is a non-null nvme_ctrl_t obtained from libnvme's
+        // tree walk and is kept alive by the borrow of Root via 'r. libnvme
+        // returns either NULL or a valid NUL-terminated C string owned by
+        // the tree, valid for 'r. cstr_to_str checks for NULL.
         unsafe { cstr_to_str(nvme_ctrl_get_sqsize(self.inner)) }
     }
 
     /// Physical PCIe slot identifier, as a string read from sysfs.
     pub fn phy_slot(&self) -> Result<&'r str> {
+        // SAFETY: self.inner is a non-null nvme_ctrl_t obtained from libnvme's
+        // tree walk and is kept alive by the borrow of Root via 'r. libnvme
+        // returns either NULL or a valid NUL-terminated C string owned by
+        // the tree, valid for 'r. cstr_to_str checks for NULL.
         unsafe { cstr_to_str(nvme_ctrl_get_phy_slot(self.inner)) }
     }
 
     /// The parent subsystem's NQN, read from sysfs without an admin command.
     pub fn subsystem_nqn(&self) -> Result<&'r str> {
+        // SAFETY: self.inner is a non-null nvme_ctrl_t obtained from libnvme's
+        // tree walk and is kept alive by the borrow of Root via 'r. libnvme
+        // returns either NULL or a valid NUL-terminated C string owned by
+        // the tree, valid for 'r. cstr_to_str checks for NULL.
         unsafe { cstr_to_str(nvme_ctrl_get_subsysnqn(self.inner)) }
     }
 
     /// Transport target address (Fabrics `traddr`). For PCIe controllers this
     /// is typically empty or the BDF, depending on libnvme version.
     pub fn transport_address(&self) -> Result<&'r str> {
+        // SAFETY: self.inner is a non-null nvme_ctrl_t obtained from libnvme's
+        // tree walk and is kept alive by the borrow of Root via 'r. libnvme
+        // returns either NULL or a valid NUL-terminated C string owned by
+        // the tree, valid for 'r. cstr_to_str checks for NULL.
         unsafe { cstr_to_str(nvme_ctrl_get_traddr(self.inner)) }
     }
 
     /// Transport service identifier (Fabrics `trsvcid`, e.g. port number).
     pub fn transport_service_id(&self) -> Result<&'r str> {
+        // SAFETY: self.inner is a non-null nvme_ctrl_t obtained from libnvme's
+        // tree walk and is kept alive by the borrow of Root via 'r. libnvme
+        // returns either NULL or a valid NUL-terminated C string owned by
+        // the tree, valid for 'r. cstr_to_str checks for NULL.
         unsafe { cstr_to_str(nvme_ctrl_get_trsvcid(self.inner)) }
     }
 
     /// Host-side transport address (Fabrics `host_traddr`).
     pub fn host_transport_address(&self) -> Result<&'r str> {
+        // SAFETY: self.inner is a non-null nvme_ctrl_t obtained from libnvme's
+        // tree walk and is kept alive by the borrow of Root via 'r. libnvme
+        // returns either NULL or a valid NUL-terminated C string owned by
+        // the tree, valid for 'r. cstr_to_str checks for NULL.
         unsafe { cstr_to_str(nvme_ctrl_get_host_traddr(self.inner)) }
     }
 
     /// Host network interface used by this controller (Fabrics `host_iface`).
     pub fn host_interface(&self) -> Result<&'r str> {
+        // SAFETY: self.inner is a non-null nvme_ctrl_t obtained from libnvme's
+        // tree walk and is kept alive by the borrow of Root via 'r. libnvme
+        // returns either NULL or a valid NUL-terminated C string owned by
+        // the tree, valid for 'r. cstr_to_str checks for NULL.
         unsafe { cstr_to_str(nvme_ctrl_get_host_iface(self.inner)) }
     }
 
@@ -145,6 +216,9 @@ impl<'r> Controller<'r> {
     /// on most distributions).
     pub fn identify(&self) -> Result<IdentifyController> {
         let mut id = Box::new(nvme_id_ctrl::default());
+        // SAFETY: self.inner is a non-null nvme_ctrl_t tied to the Root tree via 'r;
+        // id is a uniquely-owned, heap-allocated nvme_id_ctrl that outlives the call
+        // and which libnvme will fill in via the &mut pointer.
         let ret = unsafe { nvme_ctrl_identify(self.inner, id.as_mut() as *mut _) };
         check_ret(ret)?;
         Ok(IdentifyController { inner: id })
@@ -157,6 +231,8 @@ impl<'r> Controller<'r> {
     /// helper translates that into [`Error::Os`] so callers don't have to
     /// repeat the check.
     pub(crate) fn open_fd(&self) -> Result<std::os::raw::c_int> {
+        // SAFETY: self.inner is a non-null nvme_ctrl_t tied to the Root tree via 'r.
+        // libnvme's getter opens the device lazily and returns -1 on failure.
         let fd = unsafe { nvme_ctrl_get_fd(self.inner) };
         if fd < 0 {
             Err(Error::Os(io::Error::last_os_error()))
@@ -188,6 +264,9 @@ impl<'r> Controller<'r> {
             len: std::mem::size_of::<T>() as u32,
             ..Default::default()
         };
+        // SAFETY: args is fully-initialized on the stack; fd is a valid file
+        // descriptor for this controller; args.log points to `buf` which is
+        // alive for the duration of the call and sized to match args.len.
         let ret = unsafe { nvme_get_log(&mut args) };
         check_ret(ret)?;
         Ok(buf)
@@ -234,6 +313,9 @@ impl<'r> Controller<'r> {
             len: total_len as u32,
             ..Default::default()
         };
+        // SAFETY: args is fully-initialized on the stack; fd is a valid file
+        // descriptor for this controller; args.log points into `entries` which
+        // is alive for the call and holds exactly total_len bytes.
         let ret = unsafe { nvme_get_log(&mut args) };
         check_ret(ret)?;
 
@@ -274,6 +356,9 @@ impl<'r> Controller<'r> {
         let fd = self.open_fd()?;
         // 0 = transfer size from controller's reported `fwug` field
         let xfer = 0;
+        // SAFETY: fd is a valid file descriptor obtained via open_fd(); image
+        // is a borrowed slice alive for the call; libnvme reads exactly
+        // image.len() bytes via the data pointer (cast to *mut for FFI only).
         let ret = unsafe {
             nvme_fw_download_seq(
                 fd,
@@ -289,10 +374,17 @@ impl<'r> Controller<'r> {
     /// Commit a previously-downloaded firmware image to a slot and/or
     /// activate it.
     ///
-    /// **Destructive.** See [`FirmwareAction`] for the semantic of each
-    /// commit action. Slot indices are `1..=7`. `bpid` selects boot
-    /// partition `1` (`false`) or `2` (`true`); ignored for non-boot-partition
-    /// actions.
+    /// # Warning
+    ///
+    /// **Destructive and (depending on action) irreversible.** Committing
+    /// firmware to an active slot replaces the running firmware after the
+    /// next reset — a bad image can brick the drive. Test against the QEMU
+    /// fixture (or a sacrificial drive) before pointing at production
+    /// hardware.
+    ///
+    /// See [`FirmwareAction`] for the semantic of each commit action. Slot
+    /// indices are `1..=7`. `bpid` selects boot partition `1` (`false`) or
+    /// `2` (`true`); ignored for non-boot-partition actions.
     pub fn fw_commit(&self, slot: u8, action: FirmwareAction, bpid: bool) -> Result<()> {
         let fd = self.open_fd()?;
         let mut args = nvme_fw_commit_args {
@@ -304,6 +396,8 @@ impl<'r> Controller<'r> {
             slot,
             bpid,
         };
+        // SAFETY: args is fully-initialized on the stack; fd is a valid file
+        // descriptor for this controller.
         let ret = unsafe { nvme_fw_commit(&mut args) };
         check_ret(ret)
     }
@@ -336,6 +430,9 @@ impl<'r> Controller<'r> {
             rsvd2: std::ptr::null_mut(),
             data: std::ptr::null_mut(),
         };
+        // SAFETY: args is fully-initialized on the stack; fd is valid; args.ns
+        // points to id_ns (alive for the call), args.result points to new_nsid
+        // (alive for the call); reserved pointers are NULL as required.
         let ret = unsafe { nvme_ns_mgmt(&mut args) };
         check_ret(ret)?;
         Ok(new_nsid)
@@ -343,8 +440,17 @@ impl<'r> Controller<'r> {
 
     /// Delete the namespace with the given NSID.
     ///
-    /// **Destructive — irreversible.** Any host or controller still using
-    /// the namespace will see subsequent I/O fail.
+    /// # Warning
+    ///
+    /// **Destructive and irreversible.** On success, the namespace and its
+    /// data are permanently gone — there is no undo. Any host or controller
+    /// still using the namespace will see subsequent I/O fail.
+    ///
+    /// The namespace must already be detached from every controller (see
+    /// [`Self::detach_namespace`]). The controller must advertise Namespace
+    /// Management in OACS (bit 3); most consumer SSDs do not. Pre-flight
+    /// with [`Self::identify`] and inspect the OACS bits in the returned
+    /// [`IdentifyController`] before calling.
     pub fn delete_namespace(&self, nsid: u32) -> Result<()> {
         let fd = self.open_fd()?;
         let mut args = nvme_ns_mgmt_args {
@@ -360,6 +466,9 @@ impl<'r> Controller<'r> {
             rsvd2: std::ptr::null_mut(),
             data: std::ptr::null_mut(),
         };
+        // SAFETY: args is fully-initialized on the stack; fd is a valid file
+        // descriptor for this controller; pointer fields are NULL as required
+        // by the DELETE selector.
         let ret = unsafe { nvme_ns_mgmt(&mut args) };
         check_ret(ret)
     }
@@ -386,17 +495,17 @@ impl<'r> Controller<'r> {
         sel: libnvme_sys::nvme_ns_attach_sel,
     ) -> Result<()> {
         if controller_ids.len() > 2047 {
-            // nvme_ctrl_list.identifier is fixed at 2047 entries.
-            return Err(Error::NotAvailable);
+            // nvme_ctrl_list.identifier is fixed at 2047 entries per spec.
+            return Err(Error::InvalidArgument(
+                "controller_ids exceeds the NVMe spec max of 2047 entries",
+            ));
         }
         let fd = self.open_fd()?;
         let mut list = nvme_ctrl_list {
             num: controller_ids.len() as u16,
             identifier: [0; 2047],
         };
-        for (i, &id) in controller_ids.iter().enumerate() {
-            list.identifier[i] = id;
-        }
+        list.identifier[..controller_ids.len()].copy_from_slice(controller_ids);
         let mut args = nvme_ns_attach_args {
             result: std::ptr::null_mut(),
             ctrlist: &mut list as *mut _,
@@ -406,6 +515,8 @@ impl<'r> Controller<'r> {
             nsid,
             sel,
         };
+        // SAFETY: args is fully-initialized on the stack; fd is valid; ctrlist
+        // points to `list` which is alive for the duration of the call.
         let ret = unsafe { nvme_ns_attach(&mut args) };
         check_ret(ret)
     }
@@ -415,6 +526,8 @@ impl<'r> Controller<'r> {
     /// Consumes `self` since the underlying handle is no longer usable
     /// after a successful disconnect.
     pub fn disconnect(self) -> Result<()> {
+        // SAFETY: self.inner is a non-null nvme_ctrl_t tied to the Root tree
+        // via 'r. self is consumed so the handle won't be reused after.
         let ret = unsafe { nvme_disconnect_ctrl(self.inner) };
         check_ret(ret)
     }
@@ -423,17 +536,20 @@ impl<'r> Controller<'r> {
     /// `/sys/class/nvme/nvmeN/reset_controller`.
     pub fn reset(&self) -> Result<()> {
         let fd = self.open_fd()?;
+        // SAFETY: fd is a valid file descriptor obtained via open_fd().
         let ret = unsafe { nvme_ctrl_reset(fd) };
         check_ret(ret)
     }
 
     /// True if this controller has been marked as a discovery controller.
     pub fn is_discovery_controller(&self) -> bool {
+        // SAFETY: self.inner is a non-null nvme_ctrl_t tied to the Root tree via 'r.
         unsafe { nvme_ctrl_is_discovery_ctrl(self.inner) }
     }
 
     /// True if this controller's record was sourced from a discovery service.
     pub fn was_discovered(&self) -> bool {
+        // SAFETY: self.inner is a non-null nvme_ctrl_t tied to the Root tree via 'r.
         unsafe { nvme_ctrl_is_discovered(self.inner) }
     }
 
@@ -443,16 +559,20 @@ impl<'r> Controller<'r> {
     /// `nvme_ctrl_is_unique_discovery_ctrl` (added after libnvme 1.8).
     #[cfg(has_unique_discovery_ctrl)]
     pub fn is_unique_discovery_controller(&self) -> bool {
+        // SAFETY: self.inner is a non-null nvme_ctrl_t tied to the Root tree via 'r.
         unsafe { nvme_ctrl_is_unique_discovery_ctrl(self.inner) }
     }
 
     /// True if libnvme is keeping this controller alive across reconnects.
     pub fn is_persistent(&self) -> bool {
+        // SAFETY: self.inner is a non-null nvme_ctrl_t tied to the Root tree via 'r.
         unsafe { nvme_ctrl_is_persistent(self.inner) }
     }
 
     /// Toggle the persistent flag for this controller.
     pub fn set_persistent(&self, persistent: bool) {
+        // SAFETY: self.inner is a non-null nvme_ctrl_t tied to the Root tree via 'r;
+        // this only flips an internal flag on the handle.
         unsafe { nvme_ctrl_set_persistent(self.inner, persistent) };
     }
 
@@ -473,14 +593,18 @@ impl<'r> Controller<'r> {
     /// `nvme_ctrl_set_dhchap_host_key` (added after libnvme 1.8).
     #[cfg(has_dhchap_host_key)]
     pub fn set_dhchap_host_key(&self, key: &str) -> Result<()> {
-        let c = fabrics_cstring(key, "interior NUL byte in DH-HMAC-CHAP host key")?;
+        let c = str_to_cstring(key, "interior NUL byte in DH-HMAC-CHAP host key")?;
+        // SAFETY: self.inner is a non-null nvme_ctrl_t tied to 'r; c is a
+        // valid NUL-terminated C string alive for the call (libnvme copies it).
         unsafe { nvme_ctrl_set_dhchap_host_key(self.inner, c.as_ptr()) };
         Ok(())
     }
 
     /// Set the DH-HMAC-CHAP target key (used to authenticate the target).
     pub fn set_dhchap_key(&self, key: &str) -> Result<()> {
-        let c = fabrics_cstring(key, "interior NUL byte in DH-HMAC-CHAP key")?;
+        let c = str_to_cstring(key, "interior NUL byte in DH-HMAC-CHAP key")?;
+        // SAFETY: self.inner is a non-null nvme_ctrl_t tied to 'r; c is a
+        // valid NUL-terminated C string alive for the call (libnvme copies it).
         unsafe { nvme_ctrl_set_dhchap_key(self.inner, c.as_ptr()) };
         Ok(())
     }
@@ -491,7 +615,9 @@ impl<'r> Controller<'r> {
     /// `nvme_ctrl_set_tls_key` (TLS support added after libnvme 1.8).
     #[cfg(has_tls_key)]
     pub fn set_tls_key(&self, key: &str) -> Result<()> {
-        let c = fabrics_cstring(key, "interior NUL byte in TLS key")?;
+        let c = str_to_cstring(key, "interior NUL byte in TLS key")?;
+        // SAFETY: self.inner is a non-null nvme_ctrl_t tied to 'r; c is a
+        // valid NUL-terminated C string alive for the call (libnvme copies it).
         unsafe { nvme_ctrl_set_tls_key(self.inner, c.as_ptr()) };
         Ok(())
     }
@@ -502,7 +628,9 @@ impl<'r> Controller<'r> {
     /// `nvme_ctrl_set_tls_key_identity`.
     #[cfg(has_tls_key_identity)]
     pub fn set_tls_key_identity(&self, identity: &str) -> Result<()> {
-        let c = fabrics_cstring(identity, "interior NUL byte in TLS key identity")?;
+        let c = str_to_cstring(identity, "interior NUL byte in TLS key identity")?;
+        // SAFETY: self.inner is a non-null nvme_ctrl_t tied to 'r; c is a
+        // valid NUL-terminated C string alive for the call (libnvme copies it).
         unsafe { nvme_ctrl_set_tls_key_identity(self.inner, c.as_ptr()) };
         Ok(())
     }
@@ -513,19 +641,12 @@ impl<'r> Controller<'r> {
     /// `nvme_ctrl_set_keyring`.
     #[cfg(has_keyring)]
     pub fn set_keyring(&self, keyring: &str) -> Result<()> {
-        let c = fabrics_cstring(keyring, "interior NUL byte in keyring name")?;
+        let c = str_to_cstring(keyring, "interior NUL byte in keyring name")?;
+        // SAFETY: self.inner is a non-null nvme_ctrl_t tied to 'r; c is a
+        // valid NUL-terminated C string alive for the call (libnvme copies it).
         unsafe { nvme_ctrl_set_keyring(self.inner, c.as_ptr()) };
         Ok(())
     }
-}
-
-fn fabrics_cstring(s: &str, err_msg: &'static str) -> Result<std::ffi::CString> {
-    std::ffi::CString::new(s).map_err(|_| {
-        Error::Os(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            err_msg,
-        ))
-    })
 }
 
 impl std::fmt::Debug for Controller<'_> {
@@ -548,6 +669,9 @@ pub struct Controllers<'r> {
 
 impl<'r> Controllers<'r> {
     pub(crate) fn new(subsystem: nvme_subsystem_t) -> Self {
+        // SAFETY: subsystem is a valid non-null nvme_subsystem_t from the
+        // libnvme tree, tied to 'r; iterator helpers return NULL when there
+        // are no children.
         let cursor = unsafe { nvme_subsystem_first_ctrl(subsystem) };
         Controllers {
             subsystem,
@@ -565,6 +689,8 @@ impl<'r> Iterator for Controllers<'r> {
             return None;
         }
         let current = self.cursor;
+        // SAFETY: self.subsystem and current are valid non-null handles from
+        // the same libnvme tree, tied to 'r; libnvme returns NULL at end-of-list.
         self.cursor = unsafe { nvme_subsystem_next_ctrl(self.subsystem, current) };
         Some(Controller::from_raw(current))
     }

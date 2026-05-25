@@ -7,6 +7,19 @@
 
 Safe, idiomatic Rust bindings for the Linux [`libnvme`](https://github.com/linux-nvme/libnvme) C library — the userspace NVMe management library that backs `nvme-cli`.
 
+> [!WARNING]
+> **Alpha — API will change.** `0.x.y` releases break compatibility on
+> minor-version bumps. Pin to an exact patch version (`libnvme = "=0.7.0"`)
+> if you depend on this and don't want surprises. Linux-only; `libnvme`
+> doesn't exist on Windows or macOS.
+>
+> Destructive admin commands (`Format NVM`, `Sanitize`,
+> `delete_namespace`, `fw_commit`, `Lockdown`, and the I/O commands
+> `write_uncorrectable` / `write_zeroes`) **permanently mutate or destroy
+> data**. Every destructive entry point carries a `# Warning` block in
+> its rustdoc; read it before calling. Verify against the QEMU fixture
+> in [`tests/qemu/`](tests/qemu/) before pointing at real hardware.
+
 ```sh
 cargo add libnvme
 ```
@@ -36,11 +49,23 @@ A more complete `nvme list`-style example lives at [`libnvme/examples/list_nvme.
 cargo run --example list_nvme -p libnvme
 ```
 
-## Status
+## Verification status
 
-**Alpha — API will change.** `0.x.y` releases will break compatibility on minor-version bumps. Pin to an exact patch version (`= 0.7.0`) if you depend on this and don't want surprises.
+The crate is young. Coverage shape as of `v0.7.0`:
 
-This is **Linux-only**. `libnvme` doesn't exist on Windows or macOS.
+| Surface | Verification |
+| --- | --- |
+| Enumeration (tree walk, properties) | Examples (`scan`, `list_nvme`), QEMU smoke tests, CI |
+| Identify / SMART / Error log / FW slot | Examples (`id_ctrl`, `smart_log`, `fw_info`), QEMU |
+| Get / Set Features (69 methods) | Compiles + runs against libnvme 1.8 in CI; no per-feature smoke test yet |
+| Format NVM | `examples/format_smoke.rs` against QEMU only (model-name safety latch) |
+| NVM I/O (`read`/`write`/`compare`/`verify`/`write_zeroes`/`dsm`/`flush`) | `examples/io_smoke.rs` — full round-trip against QEMU NVMe |
+| Sanitize / Lockdown / Self-Test / Security S/R / FW download+commit / NS mgmt | Compiles; not yet exercised by automated tests |
+| Fabrics (Connect / Discovery / Disconnect / auth) | Compiles; not yet exercised by automated tests (would need a target) |
+
+Anything in the "compiles" tier should be considered alpha. Bug reports
+welcome, particularly from anyone running these against real hardware
+or a fabrics target.
 
 ## Requirements
 
@@ -127,9 +152,9 @@ This is **Linux-only**. `libnvme` doesn't exist on Windows or macOS.
 
 | Version | Scope |
 | --- | --- |
-| 0.8 | Command-set-specific surfaces (ZNS, Key-Value, Dispersed Namespaces, Reservations, Directives) |
-| 0.9 | NVMe-MI as a sibling `libnvme-mi` crate |
-| 1.0 | API stabilization + complete docs. **Goal: 100% safe coverage of libnvme's public API.** |
+| 0.8 | Command-set-specific surfaces (ZNS, Key-Value, Reservations, Directives) — depends on libnvme exposing the relevant symbols; some of these are still nascent upstream |
+| 0.9 | NVMe-MI as a sibling `libnvme-mi` crate (mature upstream) |
+| 1.0 | API stabilization + automated QEMU CI exercising every destructive path. **Goal: 100% safe coverage of libnvme's public API.** |
 
 ## Provider-Specific Quirks
 
@@ -139,7 +164,26 @@ Some drives may have issues that arise due to specific changes issued by their p
 
 There's a QEMU-based fixture in [`tests/qemu/`](tests/qemu/) that boots an Ubuntu 24.04 guest with a 1 GiB virtual NVMe controller attached as `/dev/nvme0`, so destructive operations (Format NVM, namespace create/delete, firmware commit) can be exercised against a real NVMe protocol stack without touching the host's drives. See [`tests/qemu/README.md`](tests/qemu/README.md) for the workflow.
 
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the build, test, and release
+workflow, plus the conventions for adding new symbol probes and SAFETY
+comments on `unsafe` blocks.
+
+## Security
+
+See [SECURITY.md](SECURITY.md). Soundness bugs and destructive-command
+aliasing bugs should be reported privately via GitHub Security Advisories.
+
 ## License
+
+`libnvme-rs` itself is dual MIT / Apache-2.0. The underlying `libnvme` C
+library is **LGPL-2.1+**; any binary that links this crate also links
+`libnvme`, and the resulting binary must comply with LGPL terms with
+respect to `libnvme`. See [libnvme's `COPYING`](https://github.com/linux-nvme/libnvme/blob/master/COPYING)
+for details. The MIT/Apache-2.0 dual-license on this crate covers
+*only* the Rust wrapper code in this repository — it does not (and
+cannot) launder the LGPL out of the linked `libnvme`.
 
 Dual-licensed under either of:
 

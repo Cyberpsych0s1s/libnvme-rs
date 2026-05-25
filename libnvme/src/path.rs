@@ -24,6 +24,7 @@ use crate::{Result, Root};
 pub struct Path<'r> {
     inner: nvme_path_t,
     _marker: PhantomData<&'r Root>,
+    _not_send_sync: PhantomData<*const ()>,
 }
 
 impl<'r> Path<'r> {
@@ -31,17 +32,24 @@ impl<'r> Path<'r> {
         Path {
             inner,
             _marker: PhantomData,
+            _not_send_sync: PhantomData,
         }
     }
 
     /// Kernel-assigned path name.
     pub fn name(&self) -> Result<&'r str> {
+        // SAFETY: self.inner is a non-null nvme_path_t tied to the Root tree via 'r.
+        // libnvme returns either NULL or a valid NUL-terminated C string owned by
+        // the tree, valid for 'r. cstr_to_str checks for NULL.
         unsafe { cstr_to_str(nvme_path_get_name(self.inner)) }
     }
 
     /// Asymmetric Namespace Access (ANA) state for this path: `optimized`,
     /// `non-optimized`, `inaccessible`, `persistent-loss`, or `change`.
     pub fn ana_state(&self) -> Result<&'r str> {
+        // SAFETY: self.inner is a non-null nvme_path_t tied to the Root tree via 'r.
+        // libnvme returns either NULL or a valid NUL-terminated C string owned by
+        // the tree, valid for 'r. cstr_to_str checks for NULL.
         unsafe { cstr_to_str(nvme_path_get_ana_state(self.inner)) }
     }
 
@@ -51,6 +59,9 @@ impl<'r> Path<'r> {
     /// `nvme_path_get_numa_nodes` (added after libnvme 1.8 / Ubuntu 24.04).
     #[cfg(has_path_numa_nodes)]
     pub fn numa_nodes(&self) -> Result<&'r str> {
+        // SAFETY: self.inner is a non-null nvme_path_t tied to the Root tree via 'r.
+        // libnvme returns either NULL or a valid NUL-terminated C string owned by
+        // the tree, valid for 'r. cstr_to_str checks for NULL.
         unsafe { cstr_to_str(nvme_path_get_numa_nodes(self.inner)) }
     }
 
@@ -60,6 +71,7 @@ impl<'r> Path<'r> {
     /// `nvme_path_get_queue_depth` (added after libnvme 1.8 / Ubuntu 24.04).
     #[cfg(has_path_queue_depth)]
     pub fn queue_depth(&self) -> i32 {
+        // SAFETY: self.inner is a non-null nvme_path_t tied to the Root tree via 'r.
         unsafe { nvme_path_get_queue_depth(self.inner) }
     }
 }
@@ -81,8 +93,8 @@ enum PathParent {
     Namespace(nvme_ns_t),
 }
 
-/// Iterator over [`Path`] entries reachable through a [`Controller`] or
-/// [`Namespace`].
+/// Iterator over [`Path`] entries reachable through a
+/// [`Controller`](crate::Controller) or [`Namespace`](crate::Namespace).
 pub struct Paths<'r> {
     parent: PathParent,
     cursor: nvme_path_t,
@@ -91,6 +103,8 @@ pub struct Paths<'r> {
 
 impl<'r> Paths<'r> {
     pub(crate) fn from_controller(ctrl: nvme_ctrl_t) -> Self {
+        // SAFETY: ctrl is a valid non-null nvme_ctrl_t from the libnvme tree,
+        // tied to 'r; iterator helpers return NULL when there are no paths.
         let cursor = unsafe { nvme_ctrl_first_path(ctrl) };
         Paths {
             parent: PathParent::Controller(ctrl),
@@ -100,6 +114,8 @@ impl<'r> Paths<'r> {
     }
 
     pub(crate) fn from_namespace(ns: nvme_ns_t) -> Self {
+        // SAFETY: ns is a valid non-null nvme_ns_t from the libnvme tree,
+        // tied to 'r; iterator helpers return NULL when there are no paths.
         let cursor = unsafe { nvme_namespace_first_path(ns) };
         Paths {
             parent: PathParent::Namespace(ns),
@@ -118,7 +134,11 @@ impl<'r> Iterator for Paths<'r> {
         }
         let current = self.cursor;
         self.cursor = match self.parent {
+            // SAFETY: c and current are valid non-null handles from the same
+            // libnvme tree, tied to 'r; libnvme returns NULL at end-of-list.
             PathParent::Controller(c) => unsafe { nvme_ctrl_next_path(c, current) },
+            // SAFETY: n and current are valid non-null handles from the same
+            // libnvme tree, tied to 'r; libnvme returns NULL at end-of-list.
             PathParent::Namespace(n) => unsafe { nvme_namespace_next_path(n, current) },
         };
         Some(Path::from_raw(current))

@@ -126,6 +126,8 @@ impl<'a, 'r> Sanitize<'a, 'r> {
         {
             args.emvs = self.emvs;
         }
+        // SAFETY: args is fully-initialized on the stack; fd is a valid file
+        // descriptor for this controller; no pointer fields are used.
         let ret = unsafe { nvme_sanitize_nvm(&mut args) };
         check_ret(ret)
     }
@@ -190,9 +192,16 @@ pub struct PassthruArgs<'a> {
 impl<'r> Controller<'r> {
     /// Begin building a Sanitize NVM command.
     ///
-    /// **Destructive — irreversible.** Sanitize erases all user data on
+    /// # Warning
+    ///
+    /// **Destructive and irreversible.** Sanitize erases all user data on
     /// the drive in a way that satisfies the NVMe spec's media-clear
-    /// guarantees. Cannot be aborted once started; runs asynchronously.
+    /// guarantees. Cannot be aborted once started; runs asynchronously
+    /// (the command returns immediately and the operation continues in
+    /// the background). The drive remains in a sanitize-in-progress state
+    /// until completion — most operations are rejected during this time.
+    /// Verify against the QEMU fixture before running against real
+    /// hardware.
     pub fn sanitize(&self) -> Sanitize<'_, 'r> {
         Sanitize::new(self)
     }
@@ -211,6 +220,9 @@ impl<'r> Controller<'r> {
             nsid,
             stc: action.as_raw(),
         };
+        // SAFETY: args is fully-initialized on the stack; fd is a valid file
+        // descriptor for this controller; result pointer is NULL as we don't
+        // need the CQE result here.
         let ret = unsafe { nvme_dev_self_test(&mut args) };
         check_ret(ret)
     }
@@ -219,6 +231,16 @@ impl<'r> Controller<'r> {
     ///
     /// Restricts or unlocks specific NVMe interface capabilities — see
     /// [`LockdownArgs`] for the parameter encoding.
+    ///
+    /// # Warning
+    ///
+    /// **Potentially destructive.** Lockdown can disable management
+    /// interfaces (out-of-band MI, debug paths) or restrict specific
+    /// opcodes; some lockdown scopes are persistent across resets and
+    /// cannot be undone without a full controller reset or vendor unlock.
+    /// Read the controller's lockdown-support reporting (Identify
+    /// Controller CAP3) and the NVMe-MI 1.2 spec sections on Lockdown
+    /// before calling.
     pub fn lockdown(&self, args: LockdownArgs) -> Result<()> {
         let fd = self.open_fd()?;
         let mut raw = nvme_lockdown_args {
@@ -232,6 +254,8 @@ impl<'r> Controller<'r> {
             ofi: args.opcode_or_fid,
             uuidx: args.uuid_index,
         };
+        // SAFETY: raw is fully-initialized on the stack; fd is a valid file
+        // descriptor for this controller; no pointer fields are used.
         let ret = unsafe { nvme_lockdown(&mut raw) };
         check_ret(ret)
     }
@@ -270,6 +294,10 @@ impl<'r> Controller<'r> {
             spsp1,
             secp,
         };
+        // SAFETY: args is fully-initialized on the stack; fd is a valid file
+        // descriptor for this controller; data points into the caller's
+        // mutable slice (alive for the call) and data_len matches its length;
+        // result is a valid &mut u32.
         let ret = unsafe { nvme_security_send(&mut args) };
         check_ret(ret)?;
         Ok(result)
@@ -304,6 +332,10 @@ impl<'r> Controller<'r> {
             spsp1,
             secp,
         };
+        // SAFETY: args is fully-initialized on the stack; fd is a valid file
+        // descriptor for this controller; data points into the caller's
+        // mutable slice (alive for the call) and data_len matches its length;
+        // result is a valid &mut u32.
         let ret = unsafe { nvme_security_receive(&mut args) };
         check_ret(ret)?;
         Ok(result)
@@ -329,6 +361,9 @@ impl<'r> Controller<'r> {
             atype: args.atype,
             rl: args.rl,
         };
+        // SAFETY: raw is fully-initialized on the stack; fd is valid; lbas
+        // points into the caller's mutable buffer alive for the call;
+        // result is a valid &mut u32.
         let ret = unsafe { nvme_get_lba_status(&mut raw) };
         check_ret(ret)?;
         Ok(result)
@@ -349,6 +384,8 @@ impl<'r> Controller<'r> {
             offset,
             value,
         };
+        // SAFETY: args is fully-initialized on the stack; fd is a valid file
+        // descriptor for this controller; no pointer fields are used.
         let ret = unsafe { nvme_set_property(&mut args) };
         check_ret(ret)
     }
@@ -367,6 +404,9 @@ impl<'r> Controller<'r> {
             timeout: 0,
             offset,
         };
+        // SAFETY: args is fully-initialized on the stack; fd is a valid file
+        // descriptor for this controller; args.value points to local `value`
+        // (alive for the call) where libnvme writes the register read.
         let ret = unsafe { nvme_get_property(&mut args) };
         check_ret(ret)?;
         Ok(value)
@@ -388,6 +428,10 @@ impl<'r> Controller<'r> {
             Some(buf) => (buf.as_mut_ptr() as *mut std::ffi::c_void, buf.len() as u32),
             None => (std::ptr::null_mut(), 0),
         };
+        // SAFETY: fd is a valid file descriptor for this controller; data_ptr
+        // and md_ptr are either NULL with zero length or point into the
+        // caller's mutable buffers alive for the call; result is a valid
+        // &mut u32 alive for the call.
         let ret = unsafe {
             nvme_admin_passthru(
                 fd,
@@ -430,6 +474,10 @@ impl<'r> Controller<'r> {
             Some(buf) => (buf.as_mut_ptr() as *mut std::ffi::c_void, buf.len() as u32),
             None => (std::ptr::null_mut(), 0),
         };
+        // SAFETY: fd is a valid file descriptor for this controller; data_ptr
+        // and md_ptr are either NULL with zero length or point into the
+        // caller's mutable buffers alive for the call; result is a valid
+        // &mut u32 alive for the call.
         let ret = unsafe {
             nvme_io_passthru(
                 fd,

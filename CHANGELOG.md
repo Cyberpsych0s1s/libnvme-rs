@@ -5,7 +5,7 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the projec
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html) with the
 caveat that pre-1.0 minor-version bumps may include breaking changes.
 
-## [0.7.0] – 2026-05-20
+## [0.7.0] – 2026-05-21
 
 ### Added
 
@@ -28,12 +28,62 @@ caveat that pre-1.0 minor-version bumps may include breaking changes.
   `WriteUncorrectable`, `Dsm`, `DsmAttr`, `DsmRange`, `Copy`, `CopyRange`
 - `examples/io_smoke.rs` — round-trips write/read/compare/verify/write_zeroes
   /dsm/flush on the QEMU NVMe fixture (model-name safety latch)
+- `Error::InvalidArgument(&'static str)` variant for input-validation
+  failures (interior NUL bytes, controller-id lists exceeding the spec
+  maximum, etc.). Previously these went through `Error::NotAvailable`,
+  which is reserved for "libnvme returned NULL" cases.
+- `# Warning` rustdoc blocks on every destructive entry point
+  (`Format::execute`, `Sanitize::execute`, `Namespace::delete_namespace`,
+  `Controller::fw_commit`, `Controller::lockdown`,
+  `Namespace::write_uncorrectable`).
+- `_not_send_sync: PhantomData<*const ()>` markers on every borrowed
+  handle (`Controller`, `Namespace`, `Subsystem`, `Host`, `Path`) so the
+  `!Send + !Sync` story is explicit at the type level rather than
+  inherited from `Root`'s auto-trait quirks.
+- `CONTRIBUTING.md` (build + style + symbol-probe guide + QEMU + release
+  process) and `SECURITY.md` (private disclosure policy).
+- CI now runs an MSRV (1.85) build, `cargo doc -D warnings`, `cargo audit`,
+  and `cargo publish --dry-run` on `v*` tags.
+
+### Fixed
+
+- **Memory leak in `take_owned_cstr` UTF-8 error path** (root.rs). The
+  libnvme-allocated string was leaked when its bytes didn't form valid
+  UTF-8. Now we copy bytes out, free unconditionally, and validate UTF-8
+  on the owned copy. Affects `generate_hostnqn`, `generate_hostid`,
+  `hostnqn_from_file`, `hostid_from_file`.
+- `Controller::attach_namespace` / `detach_namespace` returned
+  `Error::NotAvailable` when the caller passed more than 2047 controller
+  IDs; now returns `Error::InvalidArgument` with a descriptive message.
+
+### Changed
+
+- `Controller::ns_attach_op` uses `copy_from_slice` instead of a manual
+  loop when building the `nvme_ctrl_list` payload.
+- `io::base_args` uses `Default::default()` field-init instead of
+  `mem::zeroed()` + per-field writes — matches the pattern already used
+  in `Controller::get_log_page` and is more robust if libnvme adds a
+  non-zero-default field.
+- `fabrics_cstring` (`controller.rs`) promoted to `util::str_to_cstring`
+  and reused from `Root::lookup_host`, removing a small duplication.
+- Every `unsafe { ... }` block now carries a `// SAFETY: ...` comment
+  explaining the invariant the call relies on. The workspace enables
+  `clippy::undocumented_unsafe_blocks = "warn"`, and CI runs with
+  `-D warnings`, so future unsafe blocks must come with a comment.
+- `features.rs` (786 lines) split into `features/{mod,types,get,set}.rs`.
+- I/O control flags hoisted from free constants into a `bitflags`-style
+  `IoControl` struct inside `io.rs`, with builder setters in terms of
+  named bits.
 
 ### Notes
 
-- Block counts in the new API are **1-based** (`nlb = 1` means a single LBA).
-  We convert to the spec's 0-based encoding internally; this matches what most
-  users naturally type and prevents silent off-by-one bugs.
+- Block counts in the new I/O API are **1-based** (`nlb = 1` means a
+  single LBA). We convert to the spec's 0-based encoding internally;
+  this matches what most users naturally type and prevents silent
+  off-by-one bugs.
+- The reviewer-flagged crates.io 404 for `libnvme` reflected the
+  registry lag right after the `0.6.2` publish; v0.7.0 is the second
+  publish under this name.
 
 ## [0.6.2] – 2026-05-20
 

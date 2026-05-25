@@ -27,6 +27,7 @@ use crate::{Result, Root};
 pub struct Subsystem<'r> {
     inner: nvme_subsystem_t,
     _marker: PhantomData<&'r Root>,
+    _not_send_sync: PhantomData<*const ()>,
 }
 
 impl<'r> Subsystem<'r> {
@@ -34,21 +35,31 @@ impl<'r> Subsystem<'r> {
         Subsystem {
             inner,
             _marker: PhantomData,
+            _not_send_sync: PhantomData,
         }
     }
 
     /// The kernel-assigned subsystem name, e.g. `nvme-subsys0`.
     pub fn name(&self) -> Result<&'r str> {
+        // SAFETY: self.inner is a non-null nvme_subsystem_t tied to the Root tree via 'r.
+        // libnvme returns either NULL or a valid NUL-terminated C string owned by
+        // the tree, valid for 'r. cstr_to_str checks for NULL.
         unsafe { cstr_to_str(nvme_subsystem_get_name(self.inner)) }
     }
 
     /// The subsystem NVMe Qualified Name (NQN).
     pub fn nqn(&self) -> Result<&'r str> {
+        // SAFETY: self.inner is a non-null nvme_subsystem_t tied to the Root tree via 'r.
+        // libnvme returns either NULL or a valid NUL-terminated C string owned by
+        // the tree, valid for 'r. cstr_to_str checks for NULL.
         unsafe { cstr_to_str(nvme_subsystem_get_nqn(self.inner)) }
     }
 
     /// The subsystem type (e.g. `nvm`, `discovery`).
     pub fn subsystem_type(&self) -> Result<&'r str> {
+        // SAFETY: self.inner is a non-null nvme_subsystem_t tied to the Root tree via 'r.
+        // libnvme returns either NULL or a valid NUL-terminated C string owned by
+        // the tree, valid for 'r. cstr_to_str checks for NULL.
         unsafe { cstr_to_str(nvme_subsystem_get_type(self.inner)) }
     }
 
@@ -60,6 +71,9 @@ impl<'r> Subsystem<'r> {
     /// method is compiled out.
     #[cfg(has_subsystem_serial)]
     pub fn serial(&self) -> Result<&'r str> {
+        // SAFETY: self.inner is a non-null nvme_subsystem_t tied to the Root tree via 'r.
+        // libnvme returns either NULL or a valid NUL-terminated C string owned by
+        // the tree, valid for 'r. cstr_to_str checks for NULL.
         unsafe { cstr_to_str(nvme_subsystem_get_serial(self.inner)) }
     }
 
@@ -69,6 +83,9 @@ impl<'r> Subsystem<'r> {
     /// `nvme_subsystem_get_model`.
     #[cfg(has_subsystem_model)]
     pub fn model(&self) -> Result<&'r str> {
+        // SAFETY: self.inner is a non-null nvme_subsystem_t tied to the Root tree via 'r.
+        // libnvme returns either NULL or a valid NUL-terminated C string owned by
+        // the tree, valid for 'r. cstr_to_str checks for NULL.
         unsafe { cstr_to_str(nvme_subsystem_get_model(self.inner)) }
     }
 
@@ -78,6 +95,9 @@ impl<'r> Subsystem<'r> {
     /// `nvme_subsystem_get_fw_rev`.
     #[cfg(has_subsystem_fw_rev)]
     pub fn firmware(&self) -> Result<&'r str> {
+        // SAFETY: self.inner is a non-null nvme_subsystem_t tied to the Root tree via 'r.
+        // libnvme returns either NULL or a valid NUL-terminated C string owned by
+        // the tree, valid for 'r. cstr_to_str checks for NULL.
         unsafe { cstr_to_str(nvme_subsystem_get_fw_rev(self.inner)) }
     }
 
@@ -88,6 +108,9 @@ impl<'r> Subsystem<'r> {
     /// `nvme_subsystem_get_iopolicy`.
     #[cfg(has_subsystem_iopolicy)]
     pub fn iopolicy(&self) -> Result<&'r str> {
+        // SAFETY: self.inner is a non-null nvme_subsystem_t tied to the Root tree via 'r.
+        // libnvme returns either NULL or a valid NUL-terminated C string owned by
+        // the tree, valid for 'r. cstr_to_str checks for NULL.
         unsafe { cstr_to_str(nvme_subsystem_get_iopolicy(self.inner)) }
     }
 
@@ -98,6 +121,9 @@ impl<'r> Subsystem<'r> {
     /// `nvme_subsystem_get_application`.
     #[cfg(has_subsystem_application)]
     pub fn application(&self) -> Result<&'r str> {
+        // SAFETY: self.inner is a non-null nvme_subsystem_t tied to the Root tree via 'r.
+        // libnvme returns either NULL or a valid NUL-terminated C string owned by
+        // the tree, valid for 'r. cstr_to_str checks for NULL.
         unsafe { cstr_to_str(nvme_subsystem_get_application(self.inner)) }
     }
 
@@ -125,6 +151,9 @@ pub struct Subsystems<'r> {
 
 impl<'r> Subsystems<'r> {
     pub(crate) fn new(host: nvme_host_t) -> Self {
+        // SAFETY: host is a valid non-null nvme_host_t from the same libnvme
+        // tree, tied to 'r. libnvme's iterator helpers tolerate any valid
+        // parent handle and return NULL when there are no children.
         let cursor = unsafe { nvme_first_subsystem(host) };
         Subsystems {
             host,
@@ -142,6 +171,8 @@ impl<'r> Iterator for Subsystems<'r> {
             return None;
         }
         let current = self.cursor;
+        // SAFETY: self.host and current are valid non-null handles from the same
+        // libnvme tree, tied to 'r; libnvme returns NULL at end-of-list.
         self.cursor = unsafe { nvme_next_subsystem(self.host, current) };
         Some(Subsystem::from_raw(current))
     }

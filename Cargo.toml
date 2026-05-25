@@ -16,3 +16,8 @@ categories = ["external-ffi-bindings", "os::linux-apis"]
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "warn"
+
+[workspace.lints.clippy]
+# Force every `unsafe { ... }` block to carry a `// SAFETY:` comment. CI
+# runs with `-D warnings` so this becomes a hard requirement.
+undocumented_unsafe_blocks = "warn"

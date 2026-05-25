@@ -61,20 +61,32 @@ const OPC_COMPARE: u8 = libnvme_sys::nvme_cmd_compare as u8;
 const OPC_WRITE_ZEROES: u8 = libnvme_sys::nvme_cmd_write_zeroes as u8;
 const OPC_VERIFY: u8 = libnvme_sys::nvme_cmd_verify as u8;
 
-// nvme_io_control_flags — CDW12 upper bits. Bit values are fixed by the
-// NVMe spec, so we hardcode them rather than depending on libnvme exposing
-// each constant (some, like NVME_IO_NSZ, were added after libnvme 1.8 and
-// would otherwise break builds on older distros).
-const CTRL_DTYPE_STREAMS: u16 = 1 << 4;
-const CTRL_NSZ: u16 = 1 << 7;
-const CTRL_STC: u16 = 1 << 8;
-const CTRL_DEAC: u16 = 1 << 9;
-const CTRL_PRINFO_PRCHK_REF: u16 = 1 << 10;
-const CTRL_PRINFO_PRCHK_APP: u16 = 1 << 11;
-const CTRL_PRINFO_PRCHK_GUARD: u16 = 1 << 12;
-const CTRL_PRINFO_PRACT: u16 = 1 << 13;
-const CTRL_FUA: u16 = 1 << 14;
-const CTRL_LR: u16 = 1 << 15;
+/// I/O control-flag bit values for `nvme_io_args.control` (CDW12 upper bits).
+///
+/// Values are fixed by the NVMe spec, so we hardcode them rather than
+/// depending on libnvme exposing each constant. Some (e.g. `NSZ`) were
+/// added after libnvme 1.8 and would otherwise break builds on older
+/// distros.
+///
+/// Kept private; the public surface is the chainable builder setters
+/// (`.fua()`, `.limited_retry()`, `.check_guard()`, etc.) on each I/O
+/// command builder.
+#[allow(dead_code)] // some bits are reserved for future builder methods
+struct IoControl;
+
+#[allow(dead_code)]
+impl IoControl {
+    const DTYPE_STREAMS: u16 = 1 << 4;
+    const NSZ: u16 = 1 << 7;
+    const STC: u16 = 1 << 8;
+    const DEAC: u16 = 1 << 9;
+    const PRINFO_PRCHK_REF: u16 = 1 << 10;
+    const PRINFO_PRCHK_APP: u16 = 1 << 11;
+    const PRINFO_PRCHK_GUARD: u16 = 1 << 12;
+    const PRINFO_PRACT: u16 = 1 << 13;
+    const FUA: u16 = 1 << 14;
+    const LR: u16 = 1 << 15;
+}
 
 // ---------------------------------------------------------------------------
 // Shared option bag
@@ -133,6 +145,8 @@ fn invalid(msg: impl Into<String>) -> Error {
 }
 
 fn ns_fd(ns: &Namespace<'_>) -> Result<std::os::raw::c_int> {
+    // SAFETY: ns_raw(ns) is a non-null nvme_ns_t tied to the Root tree via 'r;
+    // libnvme opens the device lazily and returns -1 on failure.
     let fd = unsafe { nvme_ns_get_fd(ns_raw(ns)) };
     if fd < 0 {
         return Err(Error::Os(std::io::Error::last_os_error()));
@@ -158,6 +172,13 @@ fn check_buf_len(buf_len: usize, nlb: u32, lba_size: u32) -> Result<()> {
 }
 
 /// Build a partly-populated [`nvme_io_args`] with the mandatory fields set.
+///
+/// Uses `Default::default()` (bindgen derives it because
+/// `libnvme-sys/build.rs` enables `.derive_default(true)`) rather than
+/// `mem::zeroed`. Today the two are equivalent, but if libnvme adds a
+/// field requiring a non-zero default (e.g. a length sentinel meaning
+/// "infer"), `Default` picks it up automatically; `zeroed` would
+/// silently produce wrong behavior.
 fn base_args(
     fd: std::os::raw::c_int,
     nsid: u32,
@@ -166,15 +187,16 @@ fn base_args(
     data: *mut c_void,
     data_len: u32,
 ) -> nvme_io_args {
-    let mut args: nvme_io_args = unsafe { std::mem::zeroed() };
-    args.args_size = std::mem::size_of::<nvme_io_args>() as i32;
-    args.fd = fd;
-    args.nsid = nsid;
-    args.slba = slba;
-    args.nlb = nlb_enc;
-    args.data = data;
-    args.data_len = data_len;
-    args
+    nvme_io_args {
+        args_size: std::mem::size_of::<nvme_io_args>() as i32,
+        fd,
+        nsid,
+        slba,
+        nlb: nlb_enc,
+        data,
+        data_len,
+        ..Default::default()
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -185,38 +207,38 @@ macro_rules! io_data_setters {
     () => {
         /// Force Unit Access — bypass volatile write cache for this command.
         pub fn fua(mut self) -> Self {
-            self.opts.control |= CTRL_FUA;
+            self.opts.control |= IoControl::FUA;
             self
         }
 
         /// Limited Retry — controller should bound retry effort on error.
         pub fn limited_retry(mut self) -> Self {
-            self.opts.control |= CTRL_LR;
+            self.opts.control |= IoControl::LR;
             self
         }
 
         /// Set Protection Information Action (PRACT). Strips/inserts PI bytes
         /// per the namespace format's protection setting.
         pub fn protection_action(mut self) -> Self {
-            self.opts.control |= CTRL_PRINFO_PRACT;
+            self.opts.control |= IoControl::PRINFO_PRACT;
             self
         }
 
         /// Check Reference Tag (PRCHK.REF) — enable PI ref-tag check.
         pub fn check_reftag(mut self) -> Self {
-            self.opts.control |= CTRL_PRINFO_PRCHK_REF;
+            self.opts.control |= IoControl::PRINFO_PRCHK_REF;
             self
         }
 
         /// Check Application Tag (PRCHK.APP).
         pub fn check_apptag(mut self) -> Self {
-            self.opts.control |= CTRL_PRINFO_PRCHK_APP;
+            self.opts.control |= IoControl::PRINFO_PRCHK_APP;
             self
         }
 
         /// Check Guard (PRCHK.GUARD) — enable PI CRC check.
         pub fn check_guard(mut self) -> Self {
-            self.opts.control |= CTRL_PRINFO_PRCHK_GUARD;
+            self.opts.control |= IoControl::PRINFO_PRCHK_GUARD;
             self
         }
 
@@ -245,8 +267,8 @@ macro_rules! io_data_setters {
             self
         }
 
-        /// Dataset Management hint (a combination of
-        /// [`crate::IoDsm`] bits/values).
+        /// Dataset Management hint — a combination of frequency/latency/
+        /// access-pattern bits per NVMe `nvme_io_dsm_flags`.
         pub fn dataset_mgmt(mut self, dsm: u8) -> Self {
             self.opts.dsm_hint = dsm;
             self
@@ -261,7 +283,7 @@ macro_rules! io_data_setters {
 
         /// Use the streams directive type for this command.
         pub fn streams(mut self) -> Self {
-            self.opts.control |= CTRL_DTYPE_STREAMS;
+            self.opts.control |= IoControl::DTYPE_STREAMS;
             self
         }
 
@@ -274,7 +296,7 @@ macro_rules! io_data_setters {
 
         /// Enable Storage Tag Check (STC).
         pub fn check_storage_tag(mut self) -> Self {
-            self.opts.control |= CTRL_STC;
+            self.opts.control |= IoControl::STC;
             self
         }
 
@@ -351,6 +373,9 @@ impl<'a, 'r> Read<'a, 'r> {
         }
         args.result = &mut result;
         self.opts.apply_to(&mut args);
+        // SAFETY: args is fully-initialized on the stack; fd is valid; data
+        // points into self.data which lives for the duration of the call;
+        // metadata (if any) is alive likewise; result is a valid &mut u32.
         let ret = unsafe { nvme_io(&mut args, OPC_READ) };
         check_ret(ret)?;
         Ok(result)
@@ -407,6 +432,10 @@ impl<'a, 'r> Write<'a, 'r> {
         }
         args.result = &mut result;
         self.opts.apply_to(&mut args);
+        // SAFETY: args is fully-initialized on the stack; fd is valid; data
+        // points into self.data which lives for the call (the *mut cast is
+        // C-API conformance only — libnvme only reads it for a Write);
+        // metadata (if any) is alive likewise.
         let ret = unsafe { nvme_io(&mut args, OPC_WRITE) };
         check_ret(ret)?;
         Ok(result)
@@ -460,6 +489,10 @@ impl<'a, 'r> Compare<'a, 'r> {
         }
         args.result = &mut result;
         self.opts.apply_to(&mut args);
+        // SAFETY: args is fully-initialized on the stack; fd is valid; data
+        // points into self.data which lives for the call (the *mut cast is
+        // C-API conformance only — libnvme only reads it for Compare);
+        // metadata (if any) is alive likewise.
         let ret = unsafe { nvme_io(&mut args, OPC_COMPARE) };
         check_ret(ret)?;
         Ok(result)
@@ -473,32 +506,32 @@ impl<'a, 'r> Compare<'a, 'r> {
 macro_rules! io_nodata_setters {
     () => {
         pub fn fua(mut self) -> Self {
-            self.opts.control |= CTRL_FUA;
+            self.opts.control |= IoControl::FUA;
             self
         }
 
         pub fn limited_retry(mut self) -> Self {
-            self.opts.control |= CTRL_LR;
+            self.opts.control |= IoControl::LR;
             self
         }
 
         pub fn protection_action(mut self) -> Self {
-            self.opts.control |= CTRL_PRINFO_PRACT;
+            self.opts.control |= IoControl::PRINFO_PRACT;
             self
         }
 
         pub fn check_reftag(mut self) -> Self {
-            self.opts.control |= CTRL_PRINFO_PRCHK_REF;
+            self.opts.control |= IoControl::PRINFO_PRCHK_REF;
             self
         }
 
         pub fn check_apptag(mut self) -> Self {
-            self.opts.control |= CTRL_PRINFO_PRCHK_APP;
+            self.opts.control |= IoControl::PRINFO_PRCHK_APP;
             self
         }
 
         pub fn check_guard(mut self) -> Self {
-            self.opts.control |= CTRL_PRINFO_PRCHK_GUARD;
+            self.opts.control |= IoControl::PRINFO_PRCHK_GUARD;
             self
         }
 
@@ -558,6 +591,8 @@ impl<'a, 'r> Verify<'a, 'r> {
         );
         args.result = &mut result;
         self.opts.apply_to(&mut args);
+        // SAFETY: args is fully-initialized on the stack; fd is valid; no
+        // data/metadata buffers are used (args.data is NULL, len 0).
         let ret = unsafe { nvme_io(&mut args, OPC_VERIFY) };
         check_ret(ret)?;
         Ok(result)
@@ -586,13 +621,13 @@ impl<'a, 'r> WriteZeroes<'a, 'r> {
 
     /// Set Deallocate (DEAC) — after zeroing, the LBA range is unmapped.
     pub fn deallocate(mut self) -> Self {
-        self.opts.control |= CTRL_DEAC;
+        self.opts.control |= IoControl::DEAC;
         self
     }
 
     /// No-Deallocate after Successful Zeroing (NSZ — NVMe 2.0+).
     pub fn no_deallocate_after_zero(mut self) -> Self {
-        self.opts.control |= CTRL_NSZ;
+        self.opts.control |= IoControl::NSZ;
         self
     }
 
@@ -610,6 +645,8 @@ impl<'a, 'r> WriteZeroes<'a, 'r> {
         );
         args.result = &mut result;
         self.opts.apply_to(&mut args);
+        // SAFETY: args is fully-initialized on the stack; fd is valid; no
+        // data/metadata buffers are used (args.data is NULL, len 0).
         let ret = unsafe { nvme_io(&mut args, OPC_WRITE_ZEROES) };
         check_ret(ret)?;
         Ok(result)
@@ -618,9 +655,14 @@ impl<'a, 'r> WriteZeroes<'a, 'r> {
 
 /// Builder returned by [`Namespace::write_uncorrectable`].
 ///
-/// Marks an LBA range so that subsequent reads return Unrecovered Read Error.
-/// **Destructive:** existing data in the range becomes unreadable until the
-/// LBA is written again.
+/// # Warning
+///
+/// **Destructive.** Marks the LBA range so that subsequent reads return
+/// Unrecovered Read Error. Existing data in the range becomes unreadable
+/// until those LBAs are rewritten (either via [`Namespace::write`] or
+/// [`Namespace::write_zeroes`]). Use only for fault-injection testing
+/// or to deliberately invalidate data; never on production drives
+/// without explicit intent.
 pub struct WriteUncorrectable<'a, 'r> {
     ns: &'a Namespace<'r>,
     slba: u64,
@@ -658,6 +700,8 @@ impl<'a, 'r> WriteUncorrectable<'a, 'r> {
         );
         args.result = &mut result;
         self.opts.apply_to(&mut args);
+        // SAFETY: args is fully-initialized on the stack; fd is valid; no
+        // data/metadata buffers are used (args.data is NULL, len 0).
         let ret = unsafe { nvme_io(&mut args, OPC_WRITE_UNCOR) };
         check_ret(ret)?;
         Ok(result)
@@ -802,6 +846,8 @@ impl<'a, 'r> Dsm<'a, 'r> {
             attrs: self.attrs.bits(),
             nr_ranges: raw.len() as u16,
         };
+        // SAFETY: args is fully-initialized on the stack; fd is valid; raw is
+        // alive for the duration of the call and holds nr_ranges entries.
         let ret = unsafe { nvme_dsm(&mut args) };
         check_ret(ret)?;
         Ok(result)
@@ -1005,6 +1051,8 @@ impl<'a, 'r> Copy<'a, 'r> {
             format: self.format,
             ilbrt_u64: self.ilbrt_u64,
         };
+        // SAFETY: args is fully-initialized on the stack; fd is valid; raw is
+        // alive for the duration of the call and holds nr+1 source ranges.
         let ret = unsafe { nvme_copy(&mut args) };
         check_ret(ret)?;
         Ok(result)
@@ -1024,6 +1072,9 @@ pub(crate) fn flush(ns: &Namespace<'_>) -> Result<()> {
     // nvme_admin_passthru's signature would be wrong (Flush is an I/O
     // opcode), so use io_passthru via libnvme_sys.
     let mut result: u32 = 0;
+    // SAFETY: fd is a valid file descriptor for this namespace; the passthru
+    // call uses NULL data/metadata pointers with zero lengths (Flush carries
+    // no payload); result is a valid &mut u32 alive for the call.
     let ret = unsafe {
         nvme_io_passthru(
             fd,

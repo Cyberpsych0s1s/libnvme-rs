@@ -19,6 +19,7 @@ pub struct Host<'r> {
     inner: nvme_host_t,
     root: nvme_root_t,
     _marker: PhantomData<&'r Root>,
+    _not_send_sync: PhantomData<*const ()>,
 }
 
 impl<'r> Host<'r> {
@@ -27,6 +28,7 @@ impl<'r> Host<'r> {
             inner,
             root,
             _marker: PhantomData,
+            _not_send_sync: PhantomData,
         }
     }
 
@@ -40,11 +42,17 @@ impl<'r> Host<'r> {
 
     /// The Host NVMe Qualified Name (HostNQN), e.g. `nqn.2014-08.org.nvmexpress:uuid:...`.
     pub fn hostnqn(&self) -> Result<&'r str> {
+        // SAFETY: self.inner is a non-null nvme_host_t tied to the Root tree via 'r.
+        // libnvme returns either NULL or a valid NUL-terminated C string owned by
+        // the tree, valid for 'r. cstr_to_str checks for NULL.
         unsafe { cstr_to_str(nvme_host_get_hostnqn(self.inner)) }
     }
 
     /// The host identifier (HostID) as a UUID-formatted string.
     pub fn hostid(&self) -> Result<&'r str> {
+        // SAFETY: self.inner is a non-null nvme_host_t tied to the Root tree via 'r.
+        // libnvme returns either NULL or a valid NUL-terminated C string owned by
+        // the tree, valid for 'r. cstr_to_str checks for NULL.
         unsafe { cstr_to_str(nvme_host_get_hostid(self.inner)) }
     }
 
@@ -93,6 +101,8 @@ pub struct Hosts<'r> {
 
 impl<'r> Hosts<'r> {
     pub(crate) fn new(root: nvme_root_t) -> Self {
+        // SAFETY: root is a non-null nvme_root_t obtained from libnvme's scan,
+        // kept alive by the borrow of Root via 'r.
         let cursor = unsafe { nvme_first_host(root) };
         Hosts {
             root,
@@ -110,6 +120,9 @@ impl<'r> Iterator for Hosts<'r> {
             return None;
         }
         let current = self.cursor;
+        // SAFETY: self.root and current are valid non-null handles from the same
+        // libnvme tree, tied to 'r; libnvme's iterator helpers tolerate any
+        // valid parent handle and return NULL at end-of-list.
         self.cursor = unsafe { nvme_next_host(self.root, current) };
         Some(Host::from_raw(current, self.root))
     }

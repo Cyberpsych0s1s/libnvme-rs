@@ -236,6 +236,10 @@ impl<'a, 'r> Connect<'a, 'r> {
         let host_traddr = string_to_cstring_opt(self.host_traddr)?;
         let host_iface = string_to_cstring_opt(self.host_iface)?;
 
+        // SAFETY: host.root_ptr() is a non-null nvme_root_t alive for 'r;
+        // subsysnqn/transport are valid NUL-terminated C strings (alive for
+        // the call); the remaining pointers are either NULL or point to
+        // CStrings kept alive in this scope.
         let ctrl = unsafe {
             nvme_create_ctrl(
                 self.host.root_ptr(),
@@ -252,18 +256,26 @@ impl<'a, 'r> Connect<'a, 'r> {
         }
 
         if self.discovery {
+            // SAFETY: ctrl is non-null (checked above) and we own it until we
+            // return it via Controller::from_raw.
             unsafe { nvme_ctrl_set_discovery_ctrl(ctrl, true) };
         }
         #[cfg(has_unique_discovery_ctrl)]
         if self.unique_discovery {
+            // SAFETY: ctrl is non-null (checked above) and we own it until we
+            // return it via Controller::from_raw.
             unsafe { nvme_ctrl_set_unique_discovery_ctrl(ctrl, true) };
         }
         if self.persistent {
+            // SAFETY: ctrl is non-null (checked above) and we own it until we
+            // return it via Controller::from_raw.
             unsafe { nvme_ctrl_set_persistent(ctrl, true) };
         }
 
         // Build the fabrics config from defaults + our overrides.
         let mut cfg = nvme_fabrics_config::default();
+        // SAFETY: &mut cfg points to a stack-allocated, default-initialized
+        // nvme_fabrics_config which libnvme overwrites with its defaults.
         unsafe { nvmf_default_config(&mut cfg) };
         if let Some(n) = self.queue_size {
             cfg.queue_size = n;
@@ -296,6 +308,10 @@ impl<'a, 'r> Connect<'a, 'r> {
             cfg.host_iface = s.as_ptr() as *mut _;
         }
 
+        // SAFETY: host.as_ptr() is a non-null nvme_host_t tied to 'r; ctrl is
+        // the non-null handle we created above; &cfg references our local
+        // fabrics_config; any CString-backed pointers inside cfg are still
+        // alive in this scope.
         let ret = unsafe { nvmf_add_ctrl(self.host.as_ptr(), ctrl, &cfg) };
         check_ret(ret)?;
 
@@ -323,11 +339,15 @@ impl DiscoveryLog {
     /// Discovery generation counter — increments whenever the discovery
     /// service's record set changes. Clients use this to detect updates.
     pub fn generation_counter(&self) -> u64 {
+        // SAFETY: self.inner is a NonNull pointer to a malloc'd discovery log
+        // we own; we only read the genctr field, alive for &self.
         unsafe { (*self.inner.as_ptr()).genctr }
     }
 
     /// Number of entries in this discovery log.
     pub fn num_records(&self) -> u64 {
+        // SAFETY: self.inner is a NonNull pointer to a malloc'd discovery log
+        // we own; we only read the numrec field, alive for &self.
         unsafe { (*self.inner.as_ptr()).numrec }
     }
 
@@ -337,8 +357,14 @@ impl DiscoveryLog {
         // `entries` is bindgen's __IncompleteArrayField — its `as_ptr()`
         // points at the address immediately past the header where libnvme
         // wrote `count` entries.
+        // SAFETY: self.inner is a NonNull pointer to a malloc'd discovery log
+        // we own; entries.as_ptr() yields the start of the trailing flexible
+        // array which libnvme populated with `count` records.
         let ptr = unsafe { (*self.inner.as_ptr()).entries.as_ptr() };
         (0..count).map(move |i| DiscoveryLogEntry {
+            // SAFETY: i is in 0..count and libnvme wrote `count` consecutive
+            // entries past the header; the borrow's lifetime is bounded by
+            // &self so the backing allocation outlives the iterator.
             raw: unsafe { &*ptr.add(i) },
         })
     }
@@ -346,6 +372,9 @@ impl DiscoveryLog {
 
 impl Drop for DiscoveryLog {
     fn drop(&mut self) {
+        // SAFETY: self.inner came from libnvme's malloc-family allocator
+        // (returned by nvmf_get_discovery_log); we own it exclusively and
+        // this is the only Drop path.
         unsafe { free(self.inner.as_ptr() as *mut _) };
     }
 }
@@ -409,16 +438,25 @@ impl<'log> DiscoveryLogEntry<'log> {
 
     /// Transport service identifier (port number for TCP/RDMA).
     pub fn transport_service_id(&self) -> Result<&'log str> {
+        // SAFETY: self.raw borrows from the DiscoveryLog's malloc'd buffer for
+        // 'log; trsvcid is a fixed-size NUL-padded ASCII field within the
+        // entry, which cstr_to_str will safely scan.
         unsafe { cstr_to_str(self.raw.trsvcid.as_ptr()) }
     }
 
     /// Subsystem NQN of the discovered target.
     pub fn subnqn(&self) -> Result<&'log str> {
+        // SAFETY: self.raw borrows from the DiscoveryLog's malloc'd buffer for
+        // 'log; subnqn is a fixed-size NUL-padded ASCII field within the
+        // entry, which cstr_to_str will safely scan.
         unsafe { cstr_to_str(self.raw.subnqn.as_ptr()) }
     }
 
     /// Transport address (IP, WWPN, ...) of the discovered target.
     pub fn traddr(&self) -> Result<&'log str> {
+        // SAFETY: self.raw borrows from the DiscoveryLog's malloc'd buffer for
+        // 'log; traddr is a fixed-size NUL-padded ASCII field within the
+        // entry, which cstr_to_str will safely scan.
         unsafe { cstr_to_str(self.raw.traddr.as_ptr()) }
     }
 }
@@ -442,6 +480,9 @@ pub(crate) fn fetch_discovery_log(
     max_retries: i32,
 ) -> Result<DiscoveryLog> {
     let mut logp: *mut nvmf_discovery_log = std::ptr::null_mut();
+    // SAFETY: ctrl is a non-null nvme_ctrl_t tied to the libnvme tree; &mut
+    // logp points to a local pointer libnvme will overwrite with a fresh
+    // malloc-allocated discovery log (or leave NULL on failure).
     let ret = unsafe { nvmf_get_discovery_log(ctrl, &mut logp, max_retries) };
     check_ret(ret)?;
     DiscoveryLog::from_raw(logp)

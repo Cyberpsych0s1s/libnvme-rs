@@ -27,6 +27,13 @@ pub enum Error {
 
     /// A C string returned by libnvme contained invalid UTF-8.
     Utf8(Utf8Error),
+
+    /// Caller passed an argument that this crate rejected before forwarding
+    /// to libnvme (e.g. interior NUL byte in a string, controller-id list
+    /// exceeding the spec maximum, NLB out of range).
+    ///
+    /// The wrapped `&'static str` describes which input failed and why.
+    InvalidArgument(&'static str),
 }
 
 impl std::fmt::Display for Error {
@@ -36,6 +43,7 @@ impl std::fmt::Display for Error {
             Error::Nvme(status) => write!(f, "libnvme: NVMe status 0x{status:04x}"),
             Error::NotAvailable => write!(f, "libnvme: value not available"),
             Error::Utf8(e) => write!(f, "libnvme: invalid UTF-8: {e}"),
+            Error::InvalidArgument(msg) => write!(f, "libnvme: invalid argument: {msg}"),
         }
     }
 }
@@ -45,7 +53,7 @@ impl std::error::Error for Error {
         match self {
             Error::Os(e) => Some(e),
             Error::Utf8(e) => Some(e),
-            Error::Nvme(_) | Error::NotAvailable => None,
+            Error::Nvme(_) | Error::NotAvailable | Error::InvalidArgument(_) => None,
         }
     }
 }

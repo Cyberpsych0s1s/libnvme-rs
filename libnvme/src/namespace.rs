@@ -26,6 +26,7 @@ use crate::{Result, Root};
 pub struct Namespace<'r> {
     inner: nvme_ns_t,
     _marker: PhantomData<&'r Root>,
+    _not_send_sync: PhantomData<*const ()>,
 }
 
 impl<'r> Namespace<'r> {
@@ -33,44 +34,56 @@ impl<'r> Namespace<'r> {
         Namespace {
             inner,
             _marker: PhantomData,
+            _not_send_sync: PhantomData,
         }
     }
 
     /// Kernel-assigned namespace name, e.g. `nvme0n1`.
     pub fn name(&self) -> Result<&'r str> {
+        // SAFETY: self.inner is a non-null nvme_ns_t tied to the Root tree via 'r.
+        // libnvme returns either NULL or a valid NUL-terminated C string owned by
+        // the tree, valid for 'r. cstr_to_str checks for NULL.
         unsafe { cstr_to_str(nvme_ns_get_name(self.inner)) }
     }
 
     /// Generic-namespace name, e.g. `ng0n1`. The generic device exposes the
     /// namespace via `/dev/ng*` for passthrough I/O.
     pub fn generic_name(&self) -> Result<&'r str> {
+        // SAFETY: self.inner is a non-null nvme_ns_t tied to the Root tree via 'r.
+        // libnvme returns either NULL or a valid NUL-terminated C string owned by
+        // the tree, valid for 'r. cstr_to_str checks for NULL.
         unsafe { cstr_to_str(nvme_ns_get_generic_name(self.inner)) }
     }
 
     /// Namespace identifier (1-based, unique within the controller).
     pub fn nsid(&self) -> u32 {
+        // SAFETY: self.inner is a non-null nvme_ns_t tied to the Root tree via 'r.
         (unsafe { nvme_ns_get_nsid(self.inner) }) as u32
     }
 
     /// Logical block size in bytes (typically 512 or 4096).
     pub fn lba_size(&self) -> u32 {
+        // SAFETY: self.inner is a non-null nvme_ns_t tied to the Root tree via 'r.
         (unsafe { nvme_ns_get_lba_size(self.inner) }) as u32
     }
 
     /// Metadata bytes per LBA, or `0` if metadata is not used in the active
     /// LBA format.
     pub fn meta_size(&self) -> u32 {
+        // SAFETY: self.inner is a non-null nvme_ns_t tied to the Root tree via 'r.
         (unsafe { nvme_ns_get_meta_size(self.inner) }) as u32
     }
 
     /// Total number of logical blocks in the namespace.
     pub fn lba_count(&self) -> u64 {
+        // SAFETY: self.inner is a non-null nvme_ns_t tied to the Root tree via 'r.
         unsafe { nvme_ns_get_lba_count(self.inner) }
     }
 
     /// Number of logical blocks actually allocated within the namespace
     /// (`nuse` in Identify Namespace).
     pub fn lba_utilization(&self) -> u64 {
+        // SAFETY: self.inner is a non-null nvme_ns_t tied to the Root tree via 'r.
         unsafe { nvme_ns_get_lba_util(self.inner) }
     }
 
@@ -81,6 +94,7 @@ impl<'r> Namespace<'r> {
 
     /// Command Set Identifier. `0` = NVM, `1` = Key-Value, `2` = Zoned.
     pub fn csi(&self) -> u8 {
+        // SAFETY: self.inner is a non-null nvme_ns_t tied to the Root tree via 'r.
         (unsafe { nvme_ns_get_csi(self.inner) }) as u8
     }
 
@@ -88,46 +102,67 @@ impl<'r> Namespace<'r> {
     /// (whitespace-trimmed). Convenience wrapper that avoids walking back up
     /// through `Subsystem` / `Controller`.
     pub fn model(&self) -> Result<&'r str> {
+        // SAFETY: self.inner is a non-null nvme_ns_t tied to the Root tree via 'r.
+        // libnvme returns either NULL or a valid NUL-terminated C string owned by
+        // the tree, valid for 'r. cstr_to_str checks for NULL.
         unsafe { cstr_to_str(nvme_ns_get_model(self.inner)) }
     }
 
     /// Serial number of the controller that owns this namespace
     /// (whitespace-trimmed).
     pub fn serial(&self) -> Result<&'r str> {
+        // SAFETY: self.inner is a non-null nvme_ns_t tied to the Root tree via 'r.
+        // libnvme returns either NULL or a valid NUL-terminated C string owned by
+        // the tree, valid for 'r. cstr_to_str checks for NULL.
         unsafe { cstr_to_str(nvme_ns_get_serial(self.inner)) }
     }
 
     /// Firmware revision of the controller that owns this namespace
     /// (whitespace-trimmed).
     pub fn firmware(&self) -> Result<&'r str> {
+        // SAFETY: self.inner is a non-null nvme_ns_t tied to the Root tree via 'r.
+        // libnvme returns either NULL or a valid NUL-terminated C string owned by
+        // the tree, valid for 'r. cstr_to_str checks for NULL.
         unsafe { cstr_to_str(nvme_ns_get_firmware(self.inner)) }
     }
 
     /// 128-bit namespace UUID, or all-zero if not reported.
     pub fn uuid(&self) -> [u8; 16] {
         let mut out = [0u8; 16];
+        // SAFETY: self.inner is a non-null nvme_ns_t tied to 'r; `out` is a
+        // stack buffer of exactly 16 bytes which libnvme writes into.
         unsafe { nvme_ns_get_uuid(self.inner, out.as_mut_ptr()) };
         out
     }
 
     /// 128-bit Namespace Globally Unique Identifier (NGUID), or all-zero.
     pub fn nguid(&self) -> [u8; 16] {
+        // SAFETY: self.inner is a non-null nvme_ns_t tied to 'r. Returns NULL
+        // or a pointer to a 16-byte field owned by the tree.
         let ptr = unsafe { nvme_ns_get_nguid(self.inner) };
         if ptr.is_null() {
             return [0; 16];
         }
         let mut out = [0u8; 16];
+        // SAFETY: ptr is non-null (checked) and points to at least 16 bytes
+        // (an NGUID field owned by the tree); out is a stack array of 16
+        // bytes; the regions don't overlap.
         unsafe { std::ptr::copy_nonoverlapping(ptr, out.as_mut_ptr(), 16) };
         out
     }
 
     /// 64-bit IEEE Extended Unique Identifier (EUI-64), or all-zero.
     pub fn eui64(&self) -> [u8; 8] {
+        // SAFETY: self.inner is a non-null nvme_ns_t tied to 'r. Returns NULL
+        // or a pointer to an 8-byte field owned by the tree.
         let ptr = unsafe { nvme_ns_get_eui64(self.inner) };
         if ptr.is_null() {
             return [0; 8];
         }
         let mut out = [0u8; 8];
+        // SAFETY: ptr is non-null (checked) and points to at least 8 bytes
+        // (an EUI-64 field owned by the tree); out is a stack array of 8
+        // bytes; the regions don't overlap.
         unsafe { std::ptr::copy_nonoverlapping(ptr, out.as_mut_ptr(), 8) };
         out
     }
@@ -136,6 +171,9 @@ impl<'r> Namespace<'r> {
     /// data structure.
     pub fn identify(&self) -> Result<IdentifyNamespace> {
         let mut id = Box::new(nvme_id_ns::default());
+        // SAFETY: self.inner is a non-null nvme_ns_t tied to 'r; id is a
+        // uniquely-owned, heap-allocated nvme_id_ns that outlives the call
+        // and which libnvme will fill in via the &mut pointer.
         let ret = unsafe { nvme_ns_identify(self.inner, id.as_mut() as *mut _) };
         check_ret(ret)?;
         Ok(IdentifyNamespace { inner: id })
@@ -149,10 +187,14 @@ impl<'r> Namespace<'r> {
 
     /// Begin building a Format NVM admin command for this namespace.
     ///
-    /// **Destructive.** Format NVM erases all user data in the namespace and
-    /// applies the configured LBA format, protection settings, and secure
-    /// erase mode. The returned [`Format`] builder is inert until
-    /// [`Format::execute`] is called.
+    /// # Warning
+    ///
+    /// **Destructive and irreversible.** Format NVM erases all user data in
+    /// the namespace and applies the configured LBA format, protection
+    /// settings, and secure-erase mode. There is no undo. The returned
+    /// [`Format`] builder is inert until [`Format::execute`] is called —
+    /// that's the destructive step. Verify against the QEMU fixture
+    /// before pointing this at real hardware.
     ///
     /// ```no_run
     /// # use libnvme::{Root, SecureErase};
@@ -323,6 +365,8 @@ impl<'a, 'r> Format<'a, 'r> {
     /// Execute the Format NVM command. Blocks until the controller reports
     /// completion or returns an error.
     pub fn execute(self) -> Result<()> {
+        // SAFETY: self.ns.inner is a non-null nvme_ns_t tied to 'r; libnvme
+        // opens the device lazily and returns -1 on failure.
         let fd = unsafe { libnvme_sys::nvme_ns_get_fd(self.ns.inner) };
         if fd < 0 {
             return Err(crate::Error::Os(std::io::Error::last_os_error()));
@@ -341,6 +385,8 @@ impl<'a, 'r> Format<'a, 'r> {
             rsvd1: [0; 7],
             lbafu: self.lba_format_upper,
         };
+        // SAFETY: args is fully-initialized on the stack; fd is valid; no
+        // pointer fields reference external memory.
         let ret = unsafe { nvme_format_nvm(&mut args) };
         check_ret(ret)
     }
@@ -366,6 +412,8 @@ pub struct Namespaces<'r> {
 
 impl<'r> Namespaces<'r> {
     pub(crate) fn new(ctrl: nvme_ctrl_t) -> Self {
+        // SAFETY: ctrl is a valid non-null nvme_ctrl_t from the libnvme tree,
+        // tied to 'r; iterator helpers return NULL when there are no children.
         let cursor = unsafe { nvme_ctrl_first_ns(ctrl) };
         Namespaces {
             ctrl,
@@ -383,6 +431,8 @@ impl<'r> Iterator for Namespaces<'r> {
             return None;
         }
         let current = self.cursor;
+        // SAFETY: self.ctrl and current are valid non-null handles from the
+        // same libnvme tree, tied to 'r; libnvme returns NULL at end-of-list.
         self.cursor = unsafe { nvme_ctrl_next_ns(self.ctrl, current) };
         Some(Namespace::from_raw(current))
     }
