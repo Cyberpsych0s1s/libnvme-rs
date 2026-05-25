@@ -1,0 +1,65 @@
+name: QEMU integration
+
+# Boots the libnvme-rs QEMU NVMe fixture on a GitHub-hosted runner and
+# runs `cargo test` + the io_smoke example inside the guest. Not yet
+# PR-blocking — runs on manual trigger and weekly on `main` while we
+# stabilize the harness. Promote to PR-blocking once we trust it.
+on:
+  workflow_dispatch:
+  schedule:
+    # Weekly, Mondays 04:00 UTC. Catches libnvme / kernel drift before
+    # the next release window.
+    - cron: '0 4 * * 1'
+
+concurrency:
+  group: qemu-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  # GH-hosted runners don't expose /dev/kvm — TCG mode is forced, which
+  # is slow. Give cloud-init + cargo test generous timeouts.
+  GUEST_BOOT_TIMEOUT: 900
+  GUEST_TEST_TIMEOUT: 2400
+
+jobs:
+  qemu:
+    name: QEMU NVMe fixture
+    runs-on: ubuntu-24.04
+    # Generous: first-boot cloud-init in TCG mode takes ~10 min, then
+    # cargo build + test, then teardown. Cap at 60 min so a hung run
+    # doesn't camp on the runner.
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install QEMU + cloud-image-utils
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            qemu-system-x86 \
+            qemu-utils \
+            cloud-image-utils \
+            openssh-client \
+            ca-certificates \
+            wget
+
+      # Cache the pristine Ubuntu cloud image across runs (~600 MB).
+      # The root overlay + nvme.img get rebuilt every run (we want a
+      # fresh guest fs / drive every time).
+      - name: Cache Ubuntu base image
+        uses: actions/cache@v4
+        with:
+          path: tests/qemu/.cache/ubuntu-24.04-base.qcow2
+          key: ubuntu-24.04-cloud-image-v1
+
+      - name: Boot guest, run tests
+        run: bash tests/qemu/ci.sh
+
+      - name: Upload QEMU console log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qemu-console-log
+          path: tests/qemu/.cache/qemu.log
+          if-no-files-found: ignore

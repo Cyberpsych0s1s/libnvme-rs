@@ -16,9 +16,32 @@ cargo build --workspace --all-targets
 cargo test --workspace
 ```
 
-CI runs `cargo fmt --check`, `cargo clippy -D warnings`, `cargo test`, `cargo
-doc -D warnings`, and an MSRV (1.85) build on every PR. Make sure those all
-pass locally before requesting review.
+CI runs on every PR:
+
+| Job | What it checks |
+|---|---|
+| `test` | `cargo fmt --check`, `cargo clippy -D warnings`, `cargo build`, `cargo test`, `cargo doc -D warnings` |
+| `msrv` | Build with the toolchain in `Cargo.toml`'s `rust-version` |
+| `nightly` | Heads-up build on nightly (non-fatal — informational only) |
+| `deny` | `cargo deny check` — licenses, advisories, banned deps, sources (see `deny.toml`) |
+| `semver` | `cargo semver-checks` — compares against the published version, catches accidental breaking changes |
+| `machete` | `cargo machete` — unused-dependency detection |
+| `publish-dry-run` | On `v*` tags only — verifies the workspace packages cleanly |
+
+Plus a separate **QEMU integration workflow** (`.github/workflows/qemu.yml`)
+that boots the QEMU NVMe fixture and runs `cargo test` + `io_smoke` inside
+the guest. Currently triggers on manual dispatch and weekly cron only —
+not PR-blocking yet. Promote to PR-blocking after the harness has been
+stable for a few release cycles.
+
+Make sure the non-QEMU jobs all pass locally before requesting review:
+
+```sh
+cargo fmt --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
+```
 
 ## Style and conventions
 

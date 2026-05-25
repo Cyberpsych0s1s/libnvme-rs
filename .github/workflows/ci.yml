@@ -8,13 +8,26 @@ on:
     branches: [main]
   workflow_dispatch:
 
+# Cancel in-progress runs on the same branch/PR when a new commit is pushed.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   CARGO_TERM_COLOR: always
+  # Reproducible / non-interactive cargo behavior in CI.
+  CARGO_NET_RETRY: 10
+  RUSTUP_MAX_RETRIES: 10
+  CARGO_INCREMENTAL: 0
 
 jobs:
+  # -------------------------------------------------------------------
+  # Stable: fmt + clippy + build + test + doc, all -D warnings.
+  # -------------------------------------------------------------------
   test:
     name: Test (stable)
     runs-on: ubuntu-24.04
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
@@ -54,9 +67,15 @@ jobs:
           RUSTDOCFLAGS: -D warnings
         run: cargo doc --workspace --no-deps
 
+  # -------------------------------------------------------------------
+  # MSRV: build against the toolchain declared in Cargo.toml's
+  # `rust-version`. Reads the version dynamically so a Cargo.toml
+  # bump can't silently desync from CI.
+  # -------------------------------------------------------------------
   msrv:
-    name: MSRV (1.85)
+    name: MSRV
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
@@ -70,59 +89,128 @@ jobs:
             clang \
             libclang-dev
 
+      - name: Read MSRV from Cargo.toml
+        id: msrv
+        run: |
+          msrv=$(grep -m1 -E '^rust-version' Cargo.toml | sed -E 's/.*"([0-9.]+)".*/\1/')
+          echo "rust-version=$msrv" >> "$GITHUB_OUTPUT"
+          echo "MSRV=$msrv"
+
       - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: "1.85"
+          toolchain: ${{ steps.msrv.outputs.rust-version }}
 
       - uses: Swatinem/rust-cache@v2
         with:
-          key: msrv
+          key: msrv-${{ steps.msrv.outputs.rust-version }}
 
       - name: Build (MSRV)
         run: cargo build --workspace --all-targets
 
-  audit:
-    name: cargo-audit
+  # -------------------------------------------------------------------
+  # Nightly heads-up: non-fatal, catches upcoming-stdlib changes,
+  # new clippy lints, and ecosystem breakage before they reach stable.
+  # -------------------------------------------------------------------
+  nightly:
+    name: Nightly (heads-up, non-fatal)
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-        with:
-          key: audit
-      - name: Install cargo-audit
-        run: cargo install --locked cargo-audit
-      - name: Audit
-        # `cargo audit` requires the index, not libnvme-dev, so no apt step.
-        run: cargo audit
-
-  publish-dry-run:
-    name: cargo publish --dry-run
-    # Only on tag pushes — verifies the workspace can be published end-to-end
-    # before we try the real publish.
-    if: startsWith(github.ref, 'refs/tags/v')
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v4
-
       - name: Install Dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            build-essential \
-            pkg-config \
-            libnvme-dev \
-            clang \
-            libclang-dev
+            build-essential pkg-config libnvme-dev clang libclang-dev
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: nightly
+      - name: Build
+        run: cargo build --workspace --all-targets
+      - name: Clippy (informational)
+        run: cargo clippy --workspace --all-targets -- -D warnings
 
+  # -------------------------------------------------------------------
+  # cargo-deny: licenses, advisories, banned dependencies, sources.
+  # Supersedes the previous cargo-audit step (deny.toml runs advisories).
+  # -------------------------------------------------------------------
+  deny:
+    name: cargo-deny
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          # All four checks: licenses, advisories, sources, bans.
+          command: check
+          arguments: --all-features
+
+  # -------------------------------------------------------------------
+  # semver-checks: compares the workspace against the most recent
+  # published version on crates.io and fails on accidental breaking
+  # changes. Critical pre-1.0 — once we ship 1.0, breaking changes
+  # require a 2.0 release.
+  # -------------------------------------------------------------------
+  semver:
+    name: cargo-semver-checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config libnvme-dev clang libclang-dev
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: semver
+      - uses: obi1kenobi/cargo-semver-checks-action@v2
+        with:
+          # Will skip with a notice if the version was already published
+          # (i.e. the workspace version matches the published one).
+          rust-toolchain: manual
+          package: libnvme,libnvme-sys
+
+  # -------------------------------------------------------------------
+  # Unused-dependency check. Catches dependency drift cheaply.
+  # -------------------------------------------------------------------
+  machete:
+    name: cargo-machete (unused deps)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: bnjbvr/cargo-machete@main
+
+  # -------------------------------------------------------------------
+  # Publish-dry-run: only on v* tags. Verifies the workspace can
+  # be packaged + uploaded cleanly before we actually run `cargo publish`.
+  # -------------------------------------------------------------------
+  publish-dry-run:
+    name: cargo publish --dry-run
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config libnvme-dev clang libclang-dev
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
           key: publish-dry-run
-
       - name: Dry-run publish libnvme-sys
         run: cargo publish -p libnvme-sys --dry-run
-
-      # Dry-run for the wrapper crate can't resolve the path-dep at the new
-      # version until libnvme-sys is actually on the index, so we skip it
-      # here — the real publish workflow handles the ordering.
+      # The wrapper crate's --dry-run can't resolve the new libnvme-sys
+      # version until it's actually on the index, so we skip it here —
+      # the real publish workflow handles the ordering.

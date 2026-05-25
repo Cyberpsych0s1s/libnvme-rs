@@ -1,0 +1,32 @@
+# Dependabot configuration for libnvme-rs.
+# See https://docs.github.com/en/code-security/dependabot/dependabot-version-updates/configuration-options-for-the-dependabot.yml-file
+version: 2
+
+updates:
+  # Keep GitHub Actions versions current. Critical for security — action
+  # vulnerabilities don't show up in cargo-audit / cargo-deny.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "github-actions"
+
+  # Keep Rust crate dependencies current. Grouped by ecosystem to avoid
+  # PR spam — minor/patch updates are batched together; major bumps
+  # ship as individual PRs so each can be reviewed for breaking changes.
+  - package-ecosystem: "cargo"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "rust"
+    groups:
+      patch-and-minor:
+        update-types:
+          - "minor"
+          - "patch"
