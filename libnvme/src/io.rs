@@ -1,0 +1,1051 @@
+//! Namespace-scoped NVM I/O commands.
+//!
+//! Wraps libnvme's I/O command surface: Read, Write, Compare, Verify, Write
+//! Zeroes, Write Uncorrectable, Flush, Dataset Management (DSM), and Copy.
+//!
+//! Each command (except [`Namespace::flush`]) returns a builder that lets you
+//! tune optional fields — Force Unit Access, Limited Retry, end-to-end
+//! Protection Information, application/reference tags, dataset-management
+//! hints, directive specifiers, and the per-command timeout — before calling
+//! [`Read::execute`] et al.
+//!
+//! Block counts in this API are **1-based**: `nlb = 1` reads a single LBA.
+//! libnvme's underlying argument struct uses the NVMe-spec 0's-based encoding;
+//! we subtract one for you. The maximum value is therefore `u16::MAX as u32 + 1`
+//! (`65_536`) LBAs per command.
+//!
+//! # Example
+//!
+//! ```no_run
+//! use libnvme::Root;
+//!
+//! let root = Root::scan()?;
+//! let host = root.hosts().next().ok_or("no host")?;
+//! let subsys = host.subsystems().next().ok_or("no subsys")?;
+//! let ctrl = subsys.controllers().next().ok_or("no ctrl")?;
+//! let ns = ctrl.namespaces().next().ok_or("no ns")?;
+//!
+//! // Read the first 8 LBAs into an owned Vec.
+//! let buf = ns.read_to_vec(0, 8)?;
+//! println!("first byte: 0x{:02x}", buf[0]);
+//!
+//! // Write with FUA + limited retry.
+//! ns.write(0, 1, &[0u8; 4096]).fua().limited_retry().execute()?;
+//!
+//! // Trim 64 MiB starting at LBA 0.
+//! use libnvme::{DsmRange, DsmAttr};
+//! ns.dsm(DsmAttr::DEALLOCATE)
+//!     .ranges(&[DsmRange::new(0, 16_384)])
+//!     .execute()?;
+//! # Ok::<(), Box<dyn std::error::Error>>(())
+//! ```
+
+use std::ffi::c_void;
+
+use libnvme_sys::{
+    nvme_copy, nvme_copy_args, nvme_copy_range, nvme_dsm, nvme_dsm_args, nvme_dsm_range, nvme_io,
+    nvme_io_args, nvme_io_passthru, nvme_ns_get_fd,
+};
+
+use crate::error::{check_ret, Error, Result};
+use crate::namespace::Namespace;
+
+// libnvme opcodes (from `enum nvme_io_opcode`). Bindgen exposes these as
+// constants under various integer types depending on bindgen version; cast
+// to u8 at use-site.
+const OPC_FLUSH: u8 = libnvme_sys::nvme_cmd_flush as u8;
+const OPC_WRITE: u8 = libnvme_sys::nvme_cmd_write as u8;
+const OPC_READ: u8 = libnvme_sys::nvme_cmd_read as u8;
+const OPC_WRITE_UNCOR: u8 = libnvme_sys::nvme_cmd_write_uncor as u8;
+const OPC_COMPARE: u8 = libnvme_sys::nvme_cmd_compare as u8;
+const OPC_WRITE_ZEROES: u8 = libnvme_sys::nvme_cmd_write_zeroes as u8;
+const OPC_VERIFY: u8 = libnvme_sys::nvme_cmd_verify as u8;
+
+// nvme_io_control_flags — CDW12 upper bits. Bit values are fixed by the
+// NVMe spec, so we hardcode them rather than depending on libnvme exposing
+// each constant (some, like NVME_IO_NSZ, were added after libnvme 1.8 and
+// would otherwise break builds on older distros).
+const CTRL_DTYPE_STREAMS: u16 = 1 << 4;
+const CTRL_NSZ: u16 = 1 << 7;
+const CTRL_STC: u16 = 1 << 8;
+const CTRL_DEAC: u16 = 1 << 9;
+const CTRL_PRINFO_PRCHK_REF: u16 = 1 << 10;
+const CTRL_PRINFO_PRCHK_APP: u16 = 1 << 11;
+const CTRL_PRINFO_PRCHK_GUARD: u16 = 1 << 12;
+const CTRL_PRINFO_PRACT: u16 = 1 << 13;
+const CTRL_FUA: u16 = 1 << 14;
+const CTRL_LR: u16 = 1 << 15;
+
+// ---------------------------------------------------------------------------
+// Shared option bag
+// ---------------------------------------------------------------------------
+
+/// Common, optional knobs shared by every nvme_io_args-based command.
+///
+/// Kept private; the public builders forward setters into this.
+#[derive(Default, Clone)]
+struct IoOpts {
+    control: u16,
+    dsm_hint: u8,
+    dspec: u16,
+    apptag: u16,
+    appmask: u16,
+    reftag: u32,
+    reftag_u64: u64,
+    storage_tag: u64,
+    sts: u8,
+    pif: u8,
+    timeout_ms: u32,
+}
+
+impl IoOpts {
+    fn apply_to(&self, args: &mut nvme_io_args) {
+        args.control = self.control;
+        args.dsm = self.dsm_hint;
+        args.dspec = self.dspec;
+        args.apptag = self.apptag;
+        args.appmask = self.appmask;
+        args.reftag = self.reftag;
+        args.reftag_u64 = self.reftag_u64;
+        args.storage_tag = self.storage_tag;
+        args.sts = self.sts;
+        args.pif = self.pif;
+        args.timeout = self.timeout_ms;
+    }
+}
+
+/// Number of blocks to encode as the NVMe 0's-based `NLB` field.
+///
+/// Caller passes a 1-based count (`nlb = 1` means one LBA). Spec maxes at
+/// 65_536. Returns `Err(InvalidInput)` if `nlb == 0` or `nlb > 65_536`.
+fn encode_nlb(nlb: u32) -> Result<u16> {
+    if nlb == 0 || nlb > 65_536 {
+        return Err(invalid(format!("nlb must be 1..=65536, got {nlb}")));
+    }
+    Ok((nlb - 1) as u16)
+}
+
+fn invalid(msg: impl Into<String>) -> Error {
+    Error::Os(std::io::Error::new(
+        std::io::ErrorKind::InvalidInput,
+        msg.into(),
+    ))
+}
+
+fn ns_fd(ns: &Namespace<'_>) -> Result<std::os::raw::c_int> {
+    let fd = unsafe { nvme_ns_get_fd(ns_raw(ns)) };
+    if fd < 0 {
+        return Err(Error::Os(std::io::Error::last_os_error()));
+    }
+    Ok(fd)
+}
+
+// Reach into Namespace to grab the raw nvme_ns_t handle. Namespace::inner is
+// pub(crate); we expose a helper to keep the unsafe minimal in here.
+fn ns_raw(ns: &Namespace<'_>) -> libnvme_sys::nvme_ns_t {
+    ns.raw_handle()
+}
+
+fn check_buf_len(buf_len: usize, nlb: u32, lba_size: u32) -> Result<()> {
+    let want = u64::from(nlb) * u64::from(lba_size);
+    if buf_len as u64 != want {
+        return Err(invalid(format!(
+            "buffer length {} bytes does not match nlb*lba_size = {}*{} = {}",
+            buf_len, nlb, lba_size, want
+        )));
+    }
+    Ok(())
+}
+
+/// Build a partly-populated [`nvme_io_args`] with the mandatory fields set.
+fn base_args(
+    fd: std::os::raw::c_int,
+    nsid: u32,
+    slba: u64,
+    nlb_enc: u16,
+    data: *mut c_void,
+    data_len: u32,
+) -> nvme_io_args {
+    let mut args: nvme_io_args = unsafe { std::mem::zeroed() };
+    args.args_size = std::mem::size_of::<nvme_io_args>() as i32;
+    args.fd = fd;
+    args.nsid = nsid;
+    args.slba = slba;
+    args.nlb = nlb_enc;
+    args.data = data;
+    args.data_len = data_len;
+    args
+}
+
+// ---------------------------------------------------------------------------
+// Read / Write / Compare (data-bearing)
+// ---------------------------------------------------------------------------
+
+macro_rules! io_data_setters {
+    () => {
+        /// Force Unit Access — bypass volatile write cache for this command.
+        pub fn fua(mut self) -> Self {
+            self.opts.control |= CTRL_FUA;
+            self
+        }
+
+        /// Limited Retry — controller should bound retry effort on error.
+        pub fn limited_retry(mut self) -> Self {
+            self.opts.control |= CTRL_LR;
+            self
+        }
+
+        /// Set Protection Information Action (PRACT). Strips/inserts PI bytes
+        /// per the namespace format's protection setting.
+        pub fn protection_action(mut self) -> Self {
+            self.opts.control |= CTRL_PRINFO_PRACT;
+            self
+        }
+
+        /// Check Reference Tag (PRCHK.REF) — enable PI ref-tag check.
+        pub fn check_reftag(mut self) -> Self {
+            self.opts.control |= CTRL_PRINFO_PRCHK_REF;
+            self
+        }
+
+        /// Check Application Tag (PRCHK.APP).
+        pub fn check_apptag(mut self) -> Self {
+            self.opts.control |= CTRL_PRINFO_PRCHK_APP;
+            self
+        }
+
+        /// Check Guard (PRCHK.GUARD) — enable PI CRC check.
+        pub fn check_guard(mut self) -> Self {
+            self.opts.control |= CTRL_PRINFO_PRCHK_GUARD;
+            self
+        }
+
+        /// Expected initial Logical Block Reference Tag (ILBRT, 32-bit).
+        pub fn ref_tag(mut self, tag: u32) -> Self {
+            self.opts.reftag = tag;
+            self
+        }
+
+        /// Expected initial Logical Block Reference Tag (64-bit variant —
+        /// enhanced PI namespaces).
+        pub fn ref_tag_u64(mut self, tag: u64) -> Self {
+            self.opts.reftag_u64 = tag;
+            self
+        }
+
+        /// Expected Logical Block Application Tag.
+        pub fn app_tag(mut self, tag: u16) -> Self {
+            self.opts.apptag = tag;
+            self
+        }
+
+        /// Logical Block Application Tag Mask.
+        pub fn app_mask(mut self, mask: u16) -> Self {
+            self.opts.appmask = mask;
+            self
+        }
+
+        /// Dataset Management hint (a combination of
+        /// [`crate::IoDsm`] bits/values).
+        pub fn dataset_mgmt(mut self, dsm: u8) -> Self {
+            self.opts.dsm_hint = dsm;
+            self
+        }
+
+        /// Directive Specific value (DSPEC) — only meaningful when a
+        /// directive is in use (e.g. streams).
+        pub fn directive(mut self, dspec: u16) -> Self {
+            self.opts.dspec = dspec;
+            self
+        }
+
+        /// Use the streams directive type for this command.
+        pub fn streams(mut self) -> Self {
+            self.opts.control |= CTRL_DTYPE_STREAMS;
+            self
+        }
+
+        /// Storage Tag (variable-size, packed into CDW2/CDW3 — for enhanced
+        /// protection-info namespaces).
+        pub fn storage_tag(mut self, tag: u64) -> Self {
+            self.opts.storage_tag = tag;
+            self
+        }
+
+        /// Enable Storage Tag Check (STC).
+        pub fn check_storage_tag(mut self) -> Self {
+            self.opts.control |= CTRL_STC;
+            self
+        }
+
+        /// Storage tag size in bits — must match the namespace's Extended
+        /// LBA Format. Default `0` lets libnvme use the namespace setting.
+        pub fn storage_tag_size(mut self, sts: u8) -> Self {
+            self.opts.sts = sts;
+            self
+        }
+
+        /// Protection Information Format — must match the namespace's
+        /// Extended LBA Format. Default `0` (16b guard).
+        pub fn pi_format(mut self, pif: u8) -> Self {
+            self.opts.pif = pif;
+            self
+        }
+
+        /// Per-command timeout in milliseconds. `0` lets libnvme use the
+        /// default.
+        pub fn timeout_ms(mut self, ms: u32) -> Self {
+            self.opts.timeout_ms = ms;
+            self
+        }
+    };
+}
+
+/// Builder returned by [`Namespace::read`].
+///
+/// Fills `data` from device into the supplied buffer; `data.len()` must equal
+/// `nlb * lba_size`.
+pub struct Read<'a, 'r> {
+    ns: &'a Namespace<'r>,
+    slba: u64,
+    nlb: u32,
+    data: &'a mut [u8],
+    metadata: Option<&'a mut [u8]>,
+    opts: IoOpts,
+}
+
+impl<'a, 'r> Read<'a, 'r> {
+    pub(crate) fn new(ns: &'a Namespace<'r>, slba: u64, nlb: u32, data: &'a mut [u8]) -> Self {
+        Read {
+            ns,
+            slba,
+            nlb,
+            data,
+            metadata: None,
+            opts: IoOpts::default(),
+        }
+    }
+
+    /// Attach a metadata buffer (separate from data). Length must match
+    /// `nlb * meta_size`.
+    pub fn metadata(mut self, md: &'a mut [u8]) -> Self {
+        self.metadata = Some(md);
+        self
+    }
+
+    io_data_setters!();
+
+    /// Issue the Read command. Returns the result-dword reported by the
+    /// controller (`CDW0` of the CQE).
+    pub fn execute(mut self) -> Result<u32> {
+        check_buf_len(self.data.len(), self.nlb, self.ns.lba_size())?;
+        let nlb_enc = encode_nlb(self.nlb)?;
+        let fd = ns_fd(self.ns)?;
+        let data_ptr = self.data.as_mut_ptr() as *mut c_void;
+        let data_len = self.data.len() as u32;
+        let mut result: u32 = 0;
+        let mut args = base_args(fd, self.ns.nsid(), self.slba, nlb_enc, data_ptr, data_len);
+        if let Some(md) = self.metadata.as_deref_mut() {
+            args.metadata = md.as_mut_ptr() as *mut c_void;
+            args.metadata_len = md.len() as u32;
+        }
+        args.result = &mut result;
+        self.opts.apply_to(&mut args);
+        let ret = unsafe { nvme_io(&mut args, OPC_READ) };
+        check_ret(ret)?;
+        Ok(result)
+    }
+}
+
+/// Builder returned by [`Namespace::write`].
+///
+/// Sends bytes from `data` to the device; `data.len()` must equal
+/// `nlb * lba_size`.
+pub struct Write<'a, 'r> {
+    ns: &'a Namespace<'r>,
+    slba: u64,
+    nlb: u32,
+    data: &'a [u8],
+    metadata: Option<&'a [u8]>,
+    opts: IoOpts,
+}
+
+impl<'a, 'r> Write<'a, 'r> {
+    pub(crate) fn new(ns: &'a Namespace<'r>, slba: u64, nlb: u32, data: &'a [u8]) -> Self {
+        Write {
+            ns,
+            slba,
+            nlb,
+            data,
+            metadata: None,
+            opts: IoOpts::default(),
+        }
+    }
+
+    /// Attach a metadata buffer (separate from data).
+    pub fn metadata(mut self, md: &'a [u8]) -> Self {
+        self.metadata = Some(md);
+        self
+    }
+
+    io_data_setters!();
+
+    pub fn execute(self) -> Result<u32> {
+        check_buf_len(self.data.len(), self.nlb, self.ns.lba_size())?;
+        let nlb_enc = encode_nlb(self.nlb)?;
+        let fd = ns_fd(self.ns)?;
+        // libnvme's nvme_io_args.data is `void *`; for write it is read-only
+        // on the host side. The cast to `*mut` is a C-API conformance cast,
+        // not a real mutability claim.
+        let data_ptr = self.data.as_ptr() as *mut c_void;
+        let data_len = self.data.len() as u32;
+        let mut result: u32 = 0;
+        let mut args = base_args(fd, self.ns.nsid(), self.slba, nlb_enc, data_ptr, data_len);
+        if let Some(md) = self.metadata {
+            args.metadata = md.as_ptr() as *mut c_void;
+            args.metadata_len = md.len() as u32;
+        }
+        args.result = &mut result;
+        self.opts.apply_to(&mut args);
+        let ret = unsafe { nvme_io(&mut args, OPC_WRITE) };
+        check_ret(ret)?;
+        Ok(result)
+    }
+}
+
+/// Builder returned by [`Namespace::compare`].
+///
+/// Compares stored LBAs against the supplied host buffer. The controller
+/// returns NVMe status `0x85` (Compare Failure) via [`Error::Nvme`] if any
+/// byte differs.
+pub struct Compare<'a, 'r> {
+    ns: &'a Namespace<'r>,
+    slba: u64,
+    nlb: u32,
+    data: &'a [u8],
+    metadata: Option<&'a [u8]>,
+    opts: IoOpts,
+}
+
+impl<'a, 'r> Compare<'a, 'r> {
+    pub(crate) fn new(ns: &'a Namespace<'r>, slba: u64, nlb: u32, data: &'a [u8]) -> Self {
+        Compare {
+            ns,
+            slba,
+            nlb,
+            data,
+            metadata: None,
+            opts: IoOpts::default(),
+        }
+    }
+
+    pub fn metadata(mut self, md: &'a [u8]) -> Self {
+        self.metadata = Some(md);
+        self
+    }
+
+    io_data_setters!();
+
+    pub fn execute(self) -> Result<u32> {
+        check_buf_len(self.data.len(), self.nlb, self.ns.lba_size())?;
+        let nlb_enc = encode_nlb(self.nlb)?;
+        let fd = ns_fd(self.ns)?;
+        let data_ptr = self.data.as_ptr() as *mut c_void;
+        let data_len = self.data.len() as u32;
+        let mut result: u32 = 0;
+        let mut args = base_args(fd, self.ns.nsid(), self.slba, nlb_enc, data_ptr, data_len);
+        if let Some(md) = self.metadata {
+            args.metadata = md.as_ptr() as *mut c_void;
+            args.metadata_len = md.len() as u32;
+        }
+        args.result = &mut result;
+        self.opts.apply_to(&mut args);
+        let ret = unsafe { nvme_io(&mut args, OPC_COMPARE) };
+        check_ret(ret)?;
+        Ok(result)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Verify / WriteZeroes / WriteUncorrectable (no host buffer)
+// ---------------------------------------------------------------------------
+
+macro_rules! io_nodata_setters {
+    () => {
+        pub fn fua(mut self) -> Self {
+            self.opts.control |= CTRL_FUA;
+            self
+        }
+
+        pub fn limited_retry(mut self) -> Self {
+            self.opts.control |= CTRL_LR;
+            self
+        }
+
+        pub fn protection_action(mut self) -> Self {
+            self.opts.control |= CTRL_PRINFO_PRACT;
+            self
+        }
+
+        pub fn check_reftag(mut self) -> Self {
+            self.opts.control |= CTRL_PRINFO_PRCHK_REF;
+            self
+        }
+
+        pub fn check_apptag(mut self) -> Self {
+            self.opts.control |= CTRL_PRINFO_PRCHK_APP;
+            self
+        }
+
+        pub fn check_guard(mut self) -> Self {
+            self.opts.control |= CTRL_PRINFO_PRCHK_GUARD;
+            self
+        }
+
+        pub fn ref_tag(mut self, tag: u32) -> Self {
+            self.opts.reftag = tag;
+            self
+        }
+
+        pub fn app_tag(mut self, tag: u16) -> Self {
+            self.opts.apptag = tag;
+            self
+        }
+
+        pub fn app_mask(mut self, mask: u16) -> Self {
+            self.opts.appmask = mask;
+            self
+        }
+
+        pub fn timeout_ms(mut self, ms: u32) -> Self {
+            self.opts.timeout_ms = ms;
+            self
+        }
+    };
+}
+
+/// Builder returned by [`Namespace::verify`].
+pub struct Verify<'a, 'r> {
+    ns: &'a Namespace<'r>,
+    slba: u64,
+    nlb: u32,
+    opts: IoOpts,
+}
+
+impl<'a, 'r> Verify<'a, 'r> {
+    pub(crate) fn new(ns: &'a Namespace<'r>, slba: u64, nlb: u32) -> Self {
+        Verify {
+            ns,
+            slba,
+            nlb,
+            opts: IoOpts::default(),
+        }
+    }
+
+    io_nodata_setters!();
+
+    pub fn execute(self) -> Result<u32> {
+        let nlb_enc = encode_nlb(self.nlb)?;
+        let fd = ns_fd(self.ns)?;
+        let mut result: u32 = 0;
+        let mut args = base_args(
+            fd,
+            self.ns.nsid(),
+            self.slba,
+            nlb_enc,
+            std::ptr::null_mut(),
+            0,
+        );
+        args.result = &mut result;
+        self.opts.apply_to(&mut args);
+        let ret = unsafe { nvme_io(&mut args, OPC_VERIFY) };
+        check_ret(ret)?;
+        Ok(result)
+    }
+}
+
+/// Builder returned by [`Namespace::write_zeroes`].
+pub struct WriteZeroes<'a, 'r> {
+    ns: &'a Namespace<'r>,
+    slba: u64,
+    nlb: u32,
+    opts: IoOpts,
+}
+
+impl<'a, 'r> WriteZeroes<'a, 'r> {
+    pub(crate) fn new(ns: &'a Namespace<'r>, slba: u64, nlb: u32) -> Self {
+        WriteZeroes {
+            ns,
+            slba,
+            nlb,
+            opts: IoOpts::default(),
+        }
+    }
+
+    io_nodata_setters!();
+
+    /// Set Deallocate (DEAC) — after zeroing, the LBA range is unmapped.
+    pub fn deallocate(mut self) -> Self {
+        self.opts.control |= CTRL_DEAC;
+        self
+    }
+
+    /// No-Deallocate after Successful Zeroing (NSZ — NVMe 2.0+).
+    pub fn no_deallocate_after_zero(mut self) -> Self {
+        self.opts.control |= CTRL_NSZ;
+        self
+    }
+
+    pub fn execute(self) -> Result<u32> {
+        let nlb_enc = encode_nlb(self.nlb)?;
+        let fd = ns_fd(self.ns)?;
+        let mut result: u32 = 0;
+        let mut args = base_args(
+            fd,
+            self.ns.nsid(),
+            self.slba,
+            nlb_enc,
+            std::ptr::null_mut(),
+            0,
+        );
+        args.result = &mut result;
+        self.opts.apply_to(&mut args);
+        let ret = unsafe { nvme_io(&mut args, OPC_WRITE_ZEROES) };
+        check_ret(ret)?;
+        Ok(result)
+    }
+}
+
+/// Builder returned by [`Namespace::write_uncorrectable`].
+///
+/// Marks an LBA range so that subsequent reads return Unrecovered Read Error.
+/// **Destructive:** existing data in the range becomes unreadable until the
+/// LBA is written again.
+pub struct WriteUncorrectable<'a, 'r> {
+    ns: &'a Namespace<'r>,
+    slba: u64,
+    nlb: u32,
+    opts: IoOpts,
+}
+
+impl<'a, 'r> WriteUncorrectable<'a, 'r> {
+    pub(crate) fn new(ns: &'a Namespace<'r>, slba: u64, nlb: u32) -> Self {
+        WriteUncorrectable {
+            ns,
+            slba,
+            nlb,
+            opts: IoOpts::default(),
+        }
+    }
+
+    /// Per-command timeout in milliseconds.
+    pub fn timeout_ms(mut self, ms: u32) -> Self {
+        self.opts.timeout_ms = ms;
+        self
+    }
+
+    pub fn execute(self) -> Result<u32> {
+        let nlb_enc = encode_nlb(self.nlb)?;
+        let fd = ns_fd(self.ns)?;
+        let mut result: u32 = 0;
+        let mut args = base_args(
+            fd,
+            self.ns.nsid(),
+            self.slba,
+            nlb_enc,
+            std::ptr::null_mut(),
+            0,
+        );
+        args.result = &mut result;
+        self.opts.apply_to(&mut args);
+        let ret = unsafe { nvme_io(&mut args, OPC_WRITE_UNCOR) };
+        check_ret(ret)?;
+        Ok(result)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// DSM (Dataset Management)
+// ---------------------------------------------------------------------------
+
+/// DSM attribute bits (CDW11). Combine with `|`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DsmAttr(u32);
+
+impl DsmAttr {
+    /// Integral Dataset Read.
+    pub const INTEGRAL_READ: Self = Self(1 << 0);
+    /// Integral Dataset Write.
+    pub const INTEGRAL_WRITE: Self = Self(1 << 1);
+    /// Deallocate (the well-known TRIM/UNMAP).
+    pub const DEALLOCATE: Self = Self(1 << 2);
+
+    /// Construct from a raw mask.
+    pub const fn from_bits(bits: u32) -> Self {
+        Self(bits)
+    }
+
+    /// Raw mask.
+    pub const fn bits(self) -> u32 {
+        self.0
+    }
+}
+
+impl std::ops::BitOr for DsmAttr {
+    type Output = Self;
+    fn bitor(self, rhs: Self) -> Self {
+        Self(self.0 | rhs.0)
+    }
+}
+
+impl std::ops::BitOrAssign for DsmAttr {
+    fn bitor_assign(&mut self, rhs: Self) {
+        self.0 |= rhs.0;
+    }
+}
+
+/// One DSM range entry. NVMe spec: each entry covers up to 4 GiB of LBAs.
+#[derive(Debug, Clone, Copy)]
+pub struct DsmRange {
+    /// Context attributes (frequency / latency / access-pattern hints —
+    /// see NVMe spec figure on DSM context attributes).
+    pub context: u32,
+    /// Length in logical blocks. **0-based** per spec: 0 = 1 LBA, 1 = 2,
+    /// etc. We keep the spec encoding here because it's a 32-bit field
+    /// and 1-basing it would silently truncate.
+    pub length: u32,
+    /// Starting LBA.
+    pub slba: u64,
+}
+
+impl DsmRange {
+    /// Construct a range with no context hints. `length` is 1-based for
+    /// convenience (1 = a single LBA); decremented to spec form on send.
+    pub fn new(slba: u64, length: u32) -> Self {
+        let length = length.saturating_sub(1);
+        DsmRange {
+            context: 0,
+            length,
+            slba,
+        }
+    }
+
+    /// Attach context-attribute bits.
+    pub fn with_context(mut self, context: u32) -> Self {
+        self.context = context;
+        self
+    }
+}
+
+/// Builder returned by [`Namespace::dsm`].
+pub struct Dsm<'a, 'r> {
+    ns: &'a Namespace<'r>,
+    attrs: DsmAttr,
+    ranges: Option<&'a [DsmRange]>,
+    timeout_ms: u32,
+}
+
+impl<'a, 'r> Dsm<'a, 'r> {
+    pub(crate) fn new(ns: &'a Namespace<'r>, attrs: DsmAttr) -> Self {
+        Dsm {
+            ns,
+            attrs,
+            ranges: None,
+            timeout_ms: 0,
+        }
+    }
+
+    /// Provide the LBA ranges this DSM applies to. The DSM command accepts
+    /// up to 256 ranges per submission.
+    pub fn ranges(mut self, ranges: &'a [DsmRange]) -> Self {
+        self.ranges = Some(ranges);
+        self
+    }
+
+    pub fn timeout_ms(mut self, ms: u32) -> Self {
+        self.timeout_ms = ms;
+        self
+    }
+
+    pub fn execute(self) -> Result<u32> {
+        let ranges = self.ranges.unwrap_or(&[]);
+        if ranges.is_empty() {
+            return Err(invalid("DSM requires at least one range"));
+        }
+        if ranges.len() > 256 {
+            return Err(invalid(format!(
+                "DSM supports at most 256 ranges, got {}",
+                ranges.len()
+            )));
+        }
+
+        // Convert our Rust DsmRange into the libnvme/NVMe wire layout
+        // (little-endian). The hardware reads this directly via DMA.
+        let mut raw: Vec<nvme_dsm_range> = ranges
+            .iter()
+            .map(|r| nvme_dsm_range {
+                cattr: r.context.to_le(),
+                nlb: r.length.to_le(),
+                slba: r.slba.to_le(),
+            })
+            .collect();
+
+        let fd = ns_fd(self.ns)?;
+        let mut result: u32 = 0;
+        let mut args = nvme_dsm_args {
+            result: &mut result,
+            dsm: raw.as_mut_ptr(),
+            args_size: std::mem::size_of::<nvme_dsm_args>() as i32,
+            fd,
+            timeout: self.timeout_ms,
+            nsid: self.ns.nsid(),
+            attrs: self.attrs.bits(),
+            nr_ranges: raw.len() as u16,
+        };
+        let ret = unsafe { nvme_dsm(&mut args) };
+        check_ret(ret)?;
+        Ok(result)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Copy
+// ---------------------------------------------------------------------------
+
+/// One source range for the NVMe Copy command (format 0).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct CopyRange {
+    /// Source starting LBA.
+    pub slba: u64,
+    /// Number of logical blocks. **1-based** in this API; converted to the
+    /// spec's 0-based encoding on send.
+    pub nlb: u16,
+    /// Expected initial logical block reference tag (only meaningful on
+    /// PI-formatted namespaces).
+    pub eilbrt: u32,
+    /// Expected logical block application tag.
+    pub elbat: u16,
+    /// Expected logical block application tag mask.
+    pub elbatm: u16,
+}
+
+impl CopyRange {
+    pub fn new(slba: u64, nlb: u16) -> Self {
+        CopyRange {
+            slba,
+            nlb,
+            ..Default::default()
+        }
+    }
+
+    pub fn ref_tag(mut self, eilbrt: u32) -> Self {
+        self.eilbrt = eilbrt;
+        self
+    }
+
+    pub fn app_tag(mut self, elbat: u16, mask: u16) -> Self {
+        self.elbat = elbat;
+        self.elbatm = mask;
+        self
+    }
+}
+
+/// Builder returned by [`Namespace::copy`].
+pub struct Copy<'a, 'r> {
+    ns: &'a Namespace<'r>,
+    sdlba: u64,
+    ranges: &'a [CopyRange],
+    ilbrt: u32,
+    ilbrt_u64: u64,
+    lbat: u16,
+    lbatm: u16,
+    prinfor: u8,
+    prinfow: u8,
+    fua: bool,
+    lr: bool,
+    dtype: u8,
+    dspec: u16,
+    format: u8,
+    timeout_ms: u32,
+}
+
+impl<'a, 'r> Copy<'a, 'r> {
+    pub(crate) fn new(ns: &'a Namespace<'r>, sdlba: u64, ranges: &'a [CopyRange]) -> Self {
+        Copy {
+            ns,
+            sdlba,
+            ranges,
+            ilbrt: 0,
+            ilbrt_u64: 0,
+            lbat: 0,
+            lbatm: 0,
+            prinfor: 0,
+            prinfow: 0,
+            fua: false,
+            lr: false,
+            dtype: 0,
+            dspec: 0,
+            format: 0,
+            timeout_ms: 0,
+        }
+    }
+
+    /// Force Unit Access for the destination writes.
+    pub fn fua(mut self) -> Self {
+        self.fua = true;
+        self
+    }
+
+    /// Limited Retry for the destination writes.
+    pub fn limited_retry(mut self) -> Self {
+        self.lr = true;
+        self
+    }
+
+    /// Destination initial logical block reference tag (32-bit).
+    pub fn dest_ref_tag(mut self, tag: u32) -> Self {
+        self.ilbrt = tag;
+        self
+    }
+
+    /// Destination initial logical block reference tag (64-bit, enhanced PI).
+    pub fn dest_ref_tag_u64(mut self, tag: u64) -> Self {
+        self.ilbrt_u64 = tag;
+        self
+    }
+
+    /// Destination logical-block application tag + mask.
+    pub fn dest_app_tag(mut self, tag: u16, mask: u16) -> Self {
+        self.lbat = tag;
+        self.lbatm = mask;
+        self
+    }
+
+    /// PI field for reads from the source.
+    pub fn prinfo_read(mut self, prinfo: u8) -> Self {
+        self.prinfor = prinfo;
+        self
+    }
+
+    /// PI field for writes to the destination.
+    pub fn prinfo_write(mut self, prinfo: u8) -> Self {
+        self.prinfow = prinfo;
+        self
+    }
+
+    /// Source-range descriptor format. `0` (default) selects the 32-byte
+    /// format; `1` selects the 40-byte enhanced-PI format. Must match the
+    /// `CopyRange` shape you provided.
+    pub fn descriptor_format(mut self, format: u8) -> Self {
+        self.format = format;
+        self
+    }
+
+    /// Directive type + specifier (e.g. streams).
+    pub fn directive(mut self, dtype: u8, dspec: u16) -> Self {
+        self.dtype = dtype;
+        self.dspec = dspec;
+        self
+    }
+
+    pub fn timeout_ms(mut self, ms: u32) -> Self {
+        self.timeout_ms = ms;
+        self
+    }
+
+    pub fn execute(self) -> Result<u32> {
+        if self.ranges.is_empty() {
+            return Err(invalid("Copy requires at least one source range"));
+        }
+        if self.ranges.len() > 128 {
+            return Err(invalid(format!(
+                "Copy supports at most 128 ranges, got {}",
+                self.ranges.len()
+            )));
+        }
+
+        // Build the wire-format source-range array. NVMe spec is LE.
+        let mut raw: Vec<nvme_copy_range> = self
+            .ranges
+            .iter()
+            .map(|r| {
+                let nlb_enc = r.nlb.saturating_sub(1);
+                nvme_copy_range {
+                    rsvd0: [0u8; 8],
+                    slba: r.slba.to_le(),
+                    nlb: nlb_enc.to_le(),
+                    rsvd18: [0u8; 6],
+                    eilbrt: r.eilbrt.to_le(),
+                    elbat: r.elbat.to_le(),
+                    elbatm: r.elbatm.to_le(),
+                }
+            })
+            .collect();
+
+        let fd = ns_fd(self.ns)?;
+        let mut result: u32 = 0;
+        let mut args = nvme_copy_args {
+            sdlba: self.sdlba,
+            result: &mut result,
+            copy: raw.as_mut_ptr(),
+            args_size: std::mem::size_of::<nvme_copy_args>() as i32,
+            fd,
+            timeout: self.timeout_ms,
+            nsid: self.ns.nsid(),
+            ilbrt: self.ilbrt,
+            lr: self.lr as i32,
+            fua: self.fua as i32,
+            nr: (raw.len() - 1) as u16, // NR is 0-based per spec
+            dspec: self.dspec,
+            lbatm: self.lbatm,
+            lbat: self.lbat,
+            prinfor: self.prinfor,
+            prinfow: self.prinfow,
+            dtype: self.dtype,
+            format: self.format,
+            ilbrt_u64: self.ilbrt_u64,
+        };
+        let ret = unsafe { nvme_copy(&mut args) };
+        check_ret(ret)?;
+        Ok(result)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Flush (a passthru command — the libnvme inline wrapper builds one too)
+// ---------------------------------------------------------------------------
+
+/// Issue a Flush command on this namespace. No options — see
+/// [`Namespace::flush`] for the public entry point.
+pub(crate) fn flush(ns: &Namespace<'_>) -> Result<()> {
+    let fd = ns_fd(ns)?;
+    // Replicate `static inline nvme_flush` from libnvme/ioctl.h: build a
+    // minimal passthru with opcode=0x00, nsid set. We funnel through
+    // nvme_admin_passthru's signature would be wrong (Flush is an I/O
+    // opcode), so use io_passthru via libnvme_sys.
+    let mut result: u32 = 0;
+    let ret = unsafe {
+        nvme_io_passthru(
+            fd,
+            OPC_FLUSH,
+            0,
+            0,
+            ns.nsid(),
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            std::ptr::null_mut(),
+            0,
+            std::ptr::null_mut(),
+            0,
+            &mut result,
+        )
+    };
+    check_ret(ret)
+}

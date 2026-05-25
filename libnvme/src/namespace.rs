@@ -11,6 +11,10 @@ use libnvme_sys::{
 use crate::admin::{MetadataSettings, ProtectionInfo, ProtectionLocation, SecureErase};
 use crate::error::check_ret;
 use crate::identify::IdentifyNamespace;
+use crate::io::{
+    self, Compare, Copy, CopyRange, Dsm, DsmAttr, Read, Verify, Write, WriteUncorrectable,
+    WriteZeroes,
+};
 use crate::path::Paths;
 use crate::util::cstr_to_str;
 use crate::{Result, Root};
@@ -162,6 +166,78 @@ impl<'r> Namespace<'r> {
     /// ```
     pub fn format(&self) -> Format<'_, 'r> {
         Format::new(self)
+    }
+
+    // -------- I/O commands (see crate::io) -----------------------------
+
+    /// Raw libnvme namespace handle. `pub(crate)` so the `io` module can
+    /// reach it without exposing it externally.
+    pub(crate) fn raw_handle(&self) -> nvme_ns_t {
+        self.inner
+    }
+
+    /// Build a Read command starting at `slba`, reading `nlb` blocks
+    /// (1-based) into `buf`. `buf.len()` must equal `nlb * lba_size`.
+    pub fn read<'a>(&'a self, slba: u64, nlb: u32, buf: &'a mut [u8]) -> Read<'a, 'r> {
+        Read::new(self, slba, nlb, buf)
+    }
+
+    /// Convenience: allocate a Vec sized for `nlb` blocks and Read into it.
+    /// Defaults apply (no FUA, no protection-info checks). For finer control
+    /// use [`Namespace::read`] with your own buffer.
+    pub fn read_to_vec(&self, slba: u64, nlb: u32) -> Result<Vec<u8>> {
+        let len = (nlb as usize)
+            .checked_mul(self.lba_size() as usize)
+            .ok_or_else(|| crate::Error::Os(std::io::Error::other("buffer size overflow")))?;
+        let mut buf = vec![0u8; len];
+        self.read(slba, nlb, &mut buf).execute()?;
+        Ok(buf)
+    }
+
+    /// Build a Write command. `buf.len()` must equal `nlb * lba_size`.
+    pub fn write<'a>(&'a self, slba: u64, nlb: u32, buf: &'a [u8]) -> Write<'a, 'r> {
+        Write::new(self, slba, nlb, buf)
+    }
+
+    /// Build a Compare command — compares stored LBAs against `buf`.
+    /// Returns [`crate::Error::Nvme`] with status `0x85` if they differ.
+    pub fn compare<'a>(&'a self, slba: u64, nlb: u32, buf: &'a [u8]) -> Compare<'a, 'r> {
+        Compare::new(self, slba, nlb, buf)
+    }
+
+    /// Build a Verify command. No host buffer — the controller reads and
+    /// validates the LBA range internally.
+    pub fn verify(&self, slba: u64, nlb: u32) -> Verify<'_, 'r> {
+        Verify::new(self, slba, nlb)
+    }
+
+    /// Build a Write Zeroes command.
+    pub fn write_zeroes(&self, slba: u64, nlb: u32) -> WriteZeroes<'_, 'r> {
+        WriteZeroes::new(self, slba, nlb)
+    }
+
+    /// Build a Write Uncorrectable command. **Destructive:** the named LBAs
+    /// become unreadable (return Unrecovered Read Error) until rewritten.
+    pub fn write_uncorrectable(&self, slba: u64, nlb: u32) -> WriteUncorrectable<'_, 'r> {
+        WriteUncorrectable::new(self, slba, nlb)
+    }
+
+    /// Issue a Flush command. Pushes the volatile write cache to media.
+    pub fn flush(&self) -> Result<()> {
+        io::flush(self)
+    }
+
+    /// Build a Dataset Management command. Combine attributes with `|`,
+    /// e.g. [`DsmAttr::DEALLOCATE`] for TRIM. Set the LBA ranges via
+    /// [`Dsm::ranges`].
+    pub fn dsm(&self, attrs: DsmAttr) -> Dsm<'_, 'r> {
+        Dsm::new(self, attrs)
+    }
+
+    /// Build a Copy command. `sdlba` is the destination LBA; `ranges` are
+    /// the source ranges. Up to 128 ranges per command.
+    pub fn copy<'a>(&'a self, sdlba: u64, ranges: &'a [CopyRange]) -> Copy<'a, 'r> {
+        Copy::new(self, sdlba, ranges)
     }
 }
 

@@ -41,8 +41,16 @@ packages:
 
 # Mount the host's working copy of the repo at /mnt/host via 9p, and
 # initialize rustup for the tester user so `cargo` is on the path.
+#
+# We also write an /etc/fstab entry with `nofail` so the mount comes back
+# automatically on subsequent boots. The runcmd `mount` is for the first
+# boot only — cloud-init runs after rc.local/systemd targets, so fstab
+# alone wouldn't help.
 runcmd:
   - mkdir -p /mnt/host
+  - |
+    printf 'hostshare /mnt/host 9p trans=virtio,version=9p2000.L,rw,access=any,nofail,_netdev 0 0\n' \
+      >> /etc/fstab
   - |
     mount -t 9p -o trans=virtio,version=9p2000.L,rw,access=any \
       hostshare /mnt/host \

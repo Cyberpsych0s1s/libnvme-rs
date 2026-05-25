@@ -5,6 +5,36 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the projec
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html) with the
 caveat that pre-1.0 minor-version bumps may include breaking changes.
 
+## [0.7.0] – 2026-05-20
+
+### Added
+
+- NVM I/O command surface in the new `io` module:
+  - `Namespace::read(slba, nlb, &mut buf)` + `Namespace::read_to_vec(slba, nlb)`
+  - `Namespace::write(slba, nlb, &buf)`
+  - `Namespace::compare(slba, nlb, &buf)`
+  - `Namespace::verify(slba, nlb)`
+  - `Namespace::write_zeroes(slba, nlb)` (with `.deallocate()` /
+    `.no_deallocate_after_zero()`)
+  - `Namespace::write_uncorrectable(slba, nlb)`
+  - `Namespace::flush()`
+  - `Namespace::dsm(attrs).ranges(&[..])` for Dataset Management (TRIM)
+  - `Namespace::copy(sdlba, &ranges)` for the Copy command
+- Builder setters cover the full optional surface of `nvme_io_args`: FUA,
+  Limited Retry, PI action/check-{ref,app,guard}, storage tag/check, ref/app
+  tags, dataset-mgmt hint, directive (streams), per-command timeout, metadata
+  buffer
+- New public types: `Read`, `Write`, `Compare`, `Verify`, `WriteZeroes`,
+  `WriteUncorrectable`, `Dsm`, `DsmAttr`, `DsmRange`, `Copy`, `CopyRange`
+- `examples/io_smoke.rs` — round-trips write/read/compare/verify/write_zeroes
+  /dsm/flush on the QEMU NVMe fixture (model-name safety latch)
+
+### Notes
+
+- Block counts in the new API are **1-based** (`nlb = 1` means a single LBA).
+  We convert to the spec's 0-based encoding internally; this matches what most
+  users naturally type and prevents silent off-by-one bugs.
+
 ## [0.6.2] – 2026-05-20
 
 ### Fixed
@@ -163,6 +193,7 @@ caveat that pre-1.0 minor-version bumps may include breaking changes.
 - CI (Ubuntu 24.04, libnvme 1.8) running `cargo build`, `cargo test`,
   `cargo clippy`, `cargo fmt --check`
 
+[0.7.0]: https://github.com/Cyberpsych0s1s/libnvme-rs/releases/tag/v0.7.0
 [0.6.2]: https://github.com/Cyberpsych0s1s/libnvme-rs/releases/tag/v0.6.2
 [0.6.1]: https://github.com/Cyberpsych0s1s/libnvme-rs/releases/tag/v0.6.1
 [0.6.0]: https://github.com/Cyberpsych0s1s/libnvme-rs/releases/tag/v0.6.0

@@ -39,6 +39,7 @@ mod fabrics;
 mod features;
 mod host;
 mod identify;
+mod io;
 mod log;
 mod namespace;
 mod path;
@@ -59,6 +60,10 @@ pub use features::{
 };
 pub use host::{Host, Hosts};
 pub use identify::{IdentifyController, IdentifyNamespace, LbaFormat, NvmeVersion};
+pub use io::{
+    Compare, Copy, CopyRange, Dsm, DsmAttr, DsmRange, Read, Verify, Write, WriteUncorrectable,
+    WriteZeroes,
+};
 pub use log::{ErrorLogEntry, FirmwareSlotLog, SmartLog};
 pub use namespace::{Format, Namespace, Namespaces};
 pub use path::{Path, Paths};
