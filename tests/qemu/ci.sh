@@ -78,20 +78,29 @@ fi
 PUB_KEY="$(cat "$SSH_KEY.pub")"
 
 # -----------------------------------------------------------------------
-# Patch cloud-init's user-data to inject the CI public key. We don't
-# modify the file on disk — instead we write a temp copy.
+# Patch cloud-init's user-data to inject the CI public key.
+#
+# Important: cloud-init's TOP-LEVEL `ssh_authorized_keys:` only attaches
+# to the default cloud-image user. When the user-data defines a custom
+# `users:` block (as ours does for `tester`), keys must live inside that
+# user's own `ssh_authorized_keys:` field — otherwise cloud-init logs
+# "no authorized SSH keys fingerprints found for user tester" and SSH
+# never accepts our pubkey.
+#
+# We splice the key in at the text level rather than round-tripping
+# YAML, to keep cloud-init's `|`-style literal blocks (in runcmd) and
+# the `#cloud-config` header intact.
 # -----------------------------------------------------------------------
 USERDATA_CI="$CACHE/user-data.ci"
-{
-    cat "$DIR/cloud-init/user-data"
-    cat <<EOF
-
-# Injected by tests/qemu/ci.sh — drop the CI ed25519 pubkey into the
-# tester account so the CI script can run \`ssh tester@127.0.0.1\`.
-ssh_authorized_keys:
-  - $PUB_KEY
-EOF
-} > "$USERDATA_CI"
+awk -v key="$PUB_KEY" '
+    /^  - name: tester$/ {
+        print
+        print "    ssh_authorized_keys:"
+        print "      - " key
+        next
+    }
+    { print }
+' "$DIR/cloud-init/user-data" > "$USERDATA_CI"
 
 # -----------------------------------------------------------------------
 # Download / build images.
