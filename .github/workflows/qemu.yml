@@ -58,7 +58,7 @@ jobs:
 
       - name: Upload QEMU console log on failure
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: qemu-console-log
           path: tests/qemu/.cache/qemu.log
