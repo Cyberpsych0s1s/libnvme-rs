@@ -281,6 +281,79 @@ impl<'r> Namespace<'r> {
     pub fn copy<'a>(&'a self, sdlba: u64, ranges: &'a [CopyRange]) -> Copy<'a, 'r> {
         Copy::new(self, sdlba, ranges)
     }
+
+    // -------- Reservations (see crate::reservations) -------------------
+
+    /// Build a Reservation Acquire command. See
+    /// [`ReservationAcquire`](crate::ReservationAcquire) for the chainable
+    /// setters.
+    pub fn reservation_acquire(&self) -> crate::reservations::ReservationAcquire<'_, 'r> {
+        crate::reservations::ReservationAcquire::new(self)
+    }
+
+    /// Build a Reservation Register command.
+    pub fn reservation_register(&self) -> crate::reservations::ReservationRegister<'_, 'r> {
+        crate::reservations::ReservationRegister::new(self)
+    }
+
+    /// Build a Reservation Release command.
+    pub fn reservation_release(&self) -> crate::reservations::ReservationRelease<'_, 'r> {
+        crate::reservations::ReservationRelease::new(self)
+    }
+
+    /// Build a Reservation Report command. Supply a buffer via
+    /// [`ReservationReport::into`](crate::ReservationReport::into) (or use
+    /// `execute_to_vec`).
+    pub fn reservation_report(&self) -> crate::reservations::ReservationReport<'_, 'r> {
+        crate::reservations::ReservationReport::new(self)
+    }
+
+    // -------- Directives (see crate::directives) -----------------------
+
+    /// Build a Directive Send command.
+    pub fn directive_send(
+        &self,
+        dtype: crate::directives::DirectiveType,
+        doper: crate::directives::DirectiveSendOp,
+    ) -> crate::directives::DirectiveSend<'_, 'r> {
+        crate::directives::DirectiveSend::new(self, dtype, doper)
+    }
+
+    /// Build a Directive Receive command.
+    pub fn directive_recv(
+        &self,
+        dtype: crate::directives::DirectiveType,
+        doper: crate::directives::DirectiveRecvOp,
+    ) -> crate::directives::DirectiveRecv<'_, 'r> {
+        crate::directives::DirectiveRecv::new(self, dtype, doper)
+    }
+
+    // -------- ZNS (see crate::zns) -------------------------------------
+
+    /// Build a Zone Management Send command.
+    pub fn zns_mgmt_send(
+        &self,
+        slba: u64,
+        action: crate::zns::ZoneSendAction,
+    ) -> crate::zns::ZnsMgmtSend<'_, 'r> {
+        crate::zns::ZnsMgmtSend::new(self, slba, action)
+    }
+
+    /// Build a Zone Management Receive command. Supply a buffer via
+    /// [`ZnsMgmtRecv::into`](crate::ZnsMgmtRecv::into).
+    pub fn zns_mgmt_recv(&self, slba: u64) -> crate::zns::ZnsMgmtRecv<'_, 'r> {
+        crate::zns::ZnsMgmtRecv::new(self, slba)
+    }
+
+    /// Build a Zone Append command. Block count is 1-based.
+    pub fn zns_append<'a>(
+        &'a self,
+        zslba: u64,
+        nlb: u32,
+        data: &'a [u8],
+    ) -> crate::zns::ZnsAppend<'a, 'r> {
+        crate::zns::ZnsAppend::new(self, zslba, nlb, data)
+    }
 }
 
 /// Builder for the Format NVM admin command.

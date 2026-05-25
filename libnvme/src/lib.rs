@@ -34,6 +34,7 @@
 mod admin;
 mod commands;
 mod controller;
+mod directives;
 mod error;
 mod fabrics;
 mod features;
@@ -43,9 +44,11 @@ mod io;
 mod log;
 mod namespace;
 mod path;
+mod reservations;
 mod root;
 mod subsystem;
 mod util;
+mod zns;
 
 pub use admin::{
     FeatureSelect, FirmwareAction, MetadataSettings, ProtectionInfo, ProtectionLocation,
@@ -53,6 +56,9 @@ pub use admin::{
 };
 pub use commands::{GetLbaStatusArgs, LockdownArgs, PassthruArgs, Sanitize};
 pub use controller::{Controller, Controllers};
+pub use directives::{
+    DirectiveRecv, DirectiveRecvOp, DirectiveSend, DirectiveSendOp, DirectiveType,
+};
 pub use error::{Error, Result};
 pub use fabrics::{Connect, DiscoveryLog, DiscoveryLogEntry, Transport};
 pub use features::{
@@ -67,9 +73,17 @@ pub use io::{
 pub use log::{ErrorLogEntry, FirmwareSlotLog, SmartLog};
 pub use namespace::{Format, Namespace, Namespaces};
 pub use path::{Path, Paths};
+pub use reservations::{
+    PtplChange, ReservationAcquire, ReservationAcquireAction, ReservationRegister,
+    ReservationRegisterAction, ReservationRelease, ReservationReleaseAction, ReservationReport,
+    ReservationType,
+};
 #[cfg(has_hostid_generate)]
 pub use root::generate_hostid;
 #[cfg(has_hostid_from_file)]
 pub use root::hostid_from_file;
 pub use root::{generate_hostnqn, hostnqn_from_file, Root};
 pub use subsystem::{Subsystem, Subsystems};
+pub use zns::{
+    ZnsAppend, ZnsMgmtRecv, ZnsMgmtSend, ZoneRecvAction, ZoneReportFilter, ZoneSendAction,
+};

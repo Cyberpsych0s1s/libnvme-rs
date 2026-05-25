@@ -9,7 +9,7 @@ Safe, idiomatic Rust bindings for the Linux [`libnvme`](https://github.com/linux
 
 > [!WARNING]
 > **Alpha — API will change.** `0.x.y` releases break compatibility on
-> minor-version bumps. Pin to an exact patch version (`libnvme = "=0.7.0"`)
+> minor-version bumps. Pin to an exact patch version (`libnvme = "=0.8.0"`)
 > if you depend on this and don't want surprises. Linux-only; `libnvme`
 > doesn't exist on Windows or macOS.
 >
@@ -51,7 +51,7 @@ cargo run --example list_nvme -p libnvme
 
 ## Verification status
 
-The crate is young. Coverage shape as of `v0.7.0`:
+The crate is young. Coverage shape as of `v0.8.0`:
 
 | Surface | Verification |
 | --- | --- |
@@ -144,6 +144,27 @@ or a fabrics target.
 - **Copy** (`Namespace::copy(sdlba, &ranges)`) — multi-source copy with PI fields, FUA, directives
 - Builders cover the full optional surface of `nvme_io_args`: FUA, Limited Retry, PI action/check-{ref,app,guard}, ref/app/storage tags, dataset-mgmt hints, directives (streams), per-command timeout, separate metadata buffer
 
+### Reservations
+
+- `Namespace::reservation_acquire` / `reservation_register` /
+  `reservation_release` / `reservation_report` — multi-host shared-storage
+  coordination. Typed enums for `ReservationType` (WE / EA / WERO / EARO /
+  WEAR / EAAR), acquire / register / release actions, and `PtplChange`.
+
+### Directives
+
+- `Namespace::directive_send` / `directive_recv` — workload hints. Typed
+  `DirectiveType` (Identify / Streams / Raw) and op enums.
+
+### ZNS (Zoned Namespaces)
+
+- `Namespace::zns_mgmt_send` — Open / Close / Finish / Reset / Offline /
+  Set Descriptor Extension / ZRWA Flush
+- `Namespace::zns_mgmt_recv` — Report Zones / Extended Report Zones with
+  `ZoneReportFilter` (Empty / Open / Closed / Full / etc.)
+- `Namespace::zns_append` — append-write to a zone, returns the
+  assigned LBA
+
 ### Generic passthru (escape hatch)
 
 - **`Controller::admin_passthru(args)`** and **`Controller::io_passthru(args)`** — issue any admin- or I/O-class command not yet exposed by a typed helper. Means *no missing function blocks a user* — drop down to passthru, drop down to `libnvme-sys` for raw bindings, or open an issue requesting a typed wrapper.
@@ -152,9 +173,9 @@ or a fabrics target.
 
 | Version | Scope |
 | --- | --- |
-| 0.8 | Command-set-specific surfaces (ZNS, Key-Value, Reservations, Directives) — depends on libnvme exposing the relevant symbols; some of these are still nascent upstream |
-| 0.9 | NVMe-MI as a sibling `libnvme-mi` crate (mature upstream) |
-| 1.0 | API stabilization + automated QEMU CI exercising every destructive path. **Goal: 100% safe coverage of libnvme's public API.** |
+| 0.9 | API audit + stabilization pass + automated QEMU CI + per-feature smoke tests. No new API surface. |
+| 1.0 | Ship the stabilized surface. **Coverage at this point: 122/122 of libnvme's extern functions, either typed or reachable via `admin_passthru` / `io_passthru`.** |
+| 1.x | NVMe-MI as a sibling `libnvme-mi` crate; Key-Value command set once libnvme exposes it upstream. |
 
 ## Provider-Specific Quirks
 

@@ -5,6 +5,53 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the projec
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html) with the
 caveat that pre-1.0 minor-version bumps may include breaking changes.
 
+## [0.8.0] – 2026-05-21
+
+### Added
+
+Three command-set groups that close the gap between the v0.7 surface and
+"100% safe coverage of libnvme's command surface" — the v1.0 goal.
+
+- **Reservations** (new `reservations` module) — multi-host shared-storage
+  coordination (NVMe-oF clustering, SCSI Persistent-Reservation analog):
+  - `Namespace::reservation_acquire().key(k).rtype(t).action(a).execute()`
+  - `Namespace::reservation_register().new_key(k).action(a).ptpl(p).execute()`
+  - `Namespace::reservation_release().key(k).rtype(t).action(a).execute()`
+  - `Namespace::reservation_report().into(&mut buf).execute()` /
+    `.execute_to_vec()`
+  - Typed enums: `ReservationType` (WE/EA/WERO/EARO/WEAR/EAAR),
+    `ReservationAcquireAction`, `ReservationRegisterAction`,
+    `ReservationReleaseAction`, `PtplChange`
+- **Directives** (new `directives` module) — workload hints (Streams,
+  Identify):
+  - `Namespace::directive_send(dtype, op).data(&buf).execute()`
+  - `Namespace::directive_recv(dtype, op).into(&mut buf).execute()`
+  - Typed enums: `DirectiveType` (Identify / Streams / Raw),
+    `DirectiveSendOp`, `DirectiveRecvOp`
+- **ZNS** (new `zns` module) — Zoned Namespaces (host-managed sequential-
+  write SSDs):
+  - `Namespace::zns_mgmt_send(slba, action).select_all().execute()`
+    — Open / Close / Finish / Reset / Offline / SetDescriptorExtension /
+    ZRWA Flush
+  - `Namespace::zns_mgmt_recv(slba).filter(f).into(&mut buf).execute()`
+    — Report Zones / Extended Report Zones
+  - `Namespace::zns_append(zslba, nlb, &data).fua().execute() -> u64`
+    — returns the assigned LBA the controller picked
+  - Typed enums: `ZoneSendAction`, `ZoneRecvAction`, `ZoneReportFilter`
+
+### Notes
+
+- All three command groups round-trip via `libnvme-sys` directly to the
+  kernel NVMe driver — no static-inline workarounds.
+- All return-types follow the v0.7 convention: `Result<u32>` for
+  result-dword-bearing ops, `Result<u64>` for `zns_append` (assigned LBA).
+- Block-count encoding for `zns_append` is 1-based (matches the I/O
+  module's convention); we subtract one for the spec's 0-based NLB.
+- Coverage now stands at 122/122 of libnvme's extern functions either
+  typed or reachable via `Controller::admin_passthru` / `io_passthru`.
+  The v0.9 cycle will focus on API audit, QEMU CI automation, and
+  per-feature smoke tests ahead of v1.0.
+
 ## [0.7.0] – 2026-05-21
 
 ### Added
@@ -243,6 +290,7 @@ caveat that pre-1.0 minor-version bumps may include breaking changes.
 - CI (Ubuntu 24.04, libnvme 1.8) running `cargo build`, `cargo test`,
   `cargo clippy`, `cargo fmt --check`
 
+[0.8.0]: https://github.com/Cyberpsych0s1s/libnvme-rs/releases/tag/v0.8.0
 [0.7.0]: https://github.com/Cyberpsych0s1s/libnvme-rs/releases/tag/v0.7.0
 [0.6.2]: https://github.com/Cyberpsych0s1s/libnvme-rs/releases/tag/v0.6.2
 [0.6.1]: https://github.com/Cyberpsych0s1s/libnvme-rs/releases/tag/v0.6.1
